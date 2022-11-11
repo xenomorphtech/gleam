@@ -39,7 +39,8 @@ pub fn command(arguments: Vec<String>, target: Option<Target>, which: Which) -> 
     let status = match target.unwrap_or(config.target) {
         Target::Erlang => run_erlang(&module, arguments),
         Target::JavaScript => run_javascript(&config, &module, arguments),
-    }?;
+        Target::C => todo!(),
+     }?;
 
     std::process::exit(status);
 }

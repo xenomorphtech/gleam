@@ -53,6 +53,7 @@ extern crate pretty_assertions;
 pub mod ast;
 pub mod bit_string;
 pub mod build;
+pub mod c;
 pub mod codegen;
 pub mod config;
 pub mod diagnostic;

@@ -1,7 +1,7 @@
 use crate::{
     ast::{SrcSpan, TypedModule, UntypedModule},
     build::{dep_tree, Mode, Module, Origin, Package, Target},
-    codegen::{Erlang, ErlangApp, JavaScript},
+    codegen::{Erlang, ErlangApp, JavaScript, C},
     config::PackageConfig,
     error,
     io::{
@@ -330,7 +330,20 @@ where
             TargetCodegenConfiguration::Erlang { app_file } => {
                 self.perform_erlang_codegen(modules, app_file.as_ref())
             }
+            TargetCodegenConfiguration::C => self.perform_c_codegen(modules),
         }
+    }
+
+    fn perform_c_codegen(&mut self, modules: &[Module]) -> Result<(), Error> {
+        let mut written = HashSet::new();
+        let artifact_dir = self.out.join("dist");
+
+        C::new(&artifact_dir, &self.config.javascript).render(&self.io, modules)?;
+
+        if self.copy_native_files {
+            self.copy_project_native_files(&artifact_dir, &mut written)?;
+        }
+        Ok(())
     }
 
     fn perform_erlang_codegen(

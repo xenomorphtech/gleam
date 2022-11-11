@@ -124,7 +124,8 @@ fn gather_compiled_files(
     let extension_to_search_for = match target {
         Target::Erlang => OsStr::new("erl"),
         Target::JavaScript => OsStr::new("mjs"),
-    };
+        Target::C => OsStr::new("c"),
+     };
 
     wfs.read_dir(Path::new("build"))
         .expect("expect the build directory to exist")

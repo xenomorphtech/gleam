@@ -466,6 +466,7 @@ where
                 }),
             },
             Target::JavaScript => super::TargetCodegenConfiguration::JavaScript,
+            Target::C => super::TargetCodegenConfiguration::C,
         };
         let mut compiler = PackageCompiler::new(
             config,

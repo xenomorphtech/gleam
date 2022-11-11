@@ -1,5 +1,6 @@
 use crate::{
     build::Module,
+    c,
     config::{JavaScriptConfig, PackageConfig},
     erlang,
     io::{FileSystemWriter, Utf8Writer},
@@ -220,6 +221,65 @@ impl<'a> JavaScript<'a> {
             &mut file,
         );
         tracing::debug!(name = ?js_name, "Generated js module");
+        res
+    }
+}
+
+#[derive(Debug)]
+pub struct C<'a> {
+    output_directory: &'a Path,
+    config: &'a JavaScriptConfig,
+}
+
+impl<'a> C<'a> {
+    pub fn new(output_directory: &'a Path, config: &'a JavaScriptConfig) -> Self {
+        Self {
+            output_directory,
+            config,
+        }
+    }
+
+    pub fn render(&self, writer: &impl FileSystemWriter, modules: &[Module]) -> Result<()> {
+        for module in modules {
+            let js_name = module.name.clone();
+            self.js_module(writer, module, &js_name)?
+        }
+        // self.write_prelude(writer)?;
+        Ok(())
+    }
+
+    //    fn write_prelude(&self, writer: &impl FileSystemWriter) -> Result<()> {
+    //        writer
+    //            .writer(&self.output_directory.join("gleam.mjs"))?
+    //            .str_write(javascript::PRELUDE)?;
+    //        tracing::debug!("Generated JS prelude");
+    //        if self.config.typescript_declarations {
+    //            writer
+    //                .writer(&self.output_directory.join("gleam.d.ts"))?
+    //                .str_write(javascript::PRELUDE_TS_DEF)?;
+    //            tracing::debug!("Generated TS prelude");
+    //        }
+    //        Ok(())
+    //    }
+
+    fn js_module(
+        &self,
+        writer: &impl FileSystemWriter,
+        module: &Module,
+        js_name: &str,
+    ) -> Result<()> {
+        let name = format!("{}.c", js_name);
+        let path = self.output_directory.join(&name);
+        let mut file = writer.writer(&path)?;
+        let line_numbers = LineNumbers::new(&module.code);
+        let res = c::module(
+            &module.ast,
+            &line_numbers,
+            &module.input_path,
+            &module.code,
+            &mut file,
+        );
+        tracing::debug!(name = ?js_name, "Generated c module");
         res
     }
 }

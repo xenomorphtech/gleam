@@ -147,6 +147,13 @@ pub enum Error {
     #[error("warnings are not permitted")]
     ForbiddenWarnings { count: usize },
 
+    #[error("c codegen failed")]
+    C {
+        path: PathBuf,
+        src: Src,
+        error: crate::c::Error,
+    },
+
     #[error("javascript codegen failed")]
     JavaScript {
         path: PathBuf,
@@ -2153,6 +2160,26 @@ Fix the warnings and try again."
                     level: Level::Error,
                 }
             }
+
+            Error::C { src, path, error } => match error {
+                crate::c::Error::Unsupported { feature, location } => Diagnostic {
+                    title: "Unsupported feature for compilation target".into(),
+                    text: format!("{} is not supported for JavaScript compilation", feature),
+                    hint: None,
+                    level: Level::Error,
+                    location: Some(Location {
+                        label: Label {
+                            text: None,
+                            span: *location,
+                        },
+                        path: path.clone(),
+                        src: src.into(),
+                        extra_labels: vec![],
+                    }),
+                },
+                crate::c::Error::ImaTooLazyToDoc { } => todo!(),
+             } 
+
 
             Error::JavaScript { src, path, error } => match error {
                 javascript::Error::Unsupported { feature, location } => Diagnostic {
