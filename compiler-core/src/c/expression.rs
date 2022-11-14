@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use super::{*, pattern::CompiledPattern};
+use super::{pattern::CompiledPattern, *};
 use crate::{
     ast::*,
     line_numbers::LineNumbers,
@@ -17,10 +17,11 @@ pub(crate) struct Generator<'module> {
     current_scope_vars: im::HashMap<String, usize>,
     pub tail_position: bool,
     pub in_iife: bool,
-   // We track whether tail call recusion is used so that we can render a loop
+    // We track whether tail call recusion is used so that we can render a loop
     // at the top level of the function to use in place of pushing new stack
     // frames.
     pub tail_recursion_used: bool,
+    pub anon_functions: &'module mut Vec<TypedExpr>,
 }
 
 impl<'module> Generator<'module> {
@@ -31,6 +32,7 @@ impl<'module> Generator<'module> {
         function_name: &'module str,
         function_arguments: Vec<Option<&'module str>>,
         mut current_scope_vars: im::HashMap<String, usize>,
+        anon_functions: &'module mut Vec<TypedExpr>,
     ) -> Self {
         for &name in function_arguments.iter().flatten() {
             let _ = current_scope_vars.insert(name.to_string(), 0);
@@ -44,6 +46,7 @@ impl<'module> Generator<'module> {
             current_scope_vars,
             tail_position: true,
             in_iife: false,
+            anon_functions: anon_functions,
         }
     }
 
@@ -93,20 +96,18 @@ impl<'module> Generator<'module> {
 
     pub fn expression<'a>(&mut self, expression: &'a TypedExpr) -> Output<'a> {
         let document = match expression {
-            TypedExpr::String { value, .. } => Ok(string(value)),
+            TypedExpr::String { value, .. } => Ok(docvec!["gleamString_from(", string(value), ")"]),
 
             TypedExpr::Int { value, .. } => Ok(int(value)),
             TypedExpr::Float { value, .. } => Ok(float(value)),
 
-            TypedExpr::List { elements, tail, .. } => {
-                self.not_in_tail_position(|gen| {
-                    let tail = match tail {
-                        Some(tail) => Some(gen.wrap_expression(tail)?),
-                        None => None,
-                    };
-                    list(elements.iter().map(|e| gen.wrap_expression(e)), tail)
-                })
-            }
+            TypedExpr::List { elements, tail, .. } => self.not_in_tail_position(|gen| {
+                let tail = match tail {
+                    Some(tail) => Some(gen.wrap_expression(tail)?),
+                    None => None,
+                };
+                list(elements.iter().map(|e| gen.wrap_expression(e)), tail)
+            }),
 
             TypedExpr::Tuple { elems, .. } => self.tuple(elems),
             TypedExpr::TupleIndex { tuple, index, .. } => self.tuple_index(tuple, *index),
@@ -119,7 +120,7 @@ impl<'module> Generator<'module> {
             } => self.case(*location, subjects, clauses),
 
             TypedExpr::Call { fun, args, .. } => self.call(fun, args),
-            TypedExpr::Fn { args, body, .. } => self.fn_(args, body),
+            TypedExpr::Fn { args, body, .. } => self.fn_(expression),
 
             TypedExpr::RecordAccess { record, label, .. } => self.record_access(record, label),
             TypedExpr::RecordUpdate { spread, args, .. } => self.record_update(spread, args),
@@ -132,7 +133,12 @@ impl<'module> Generator<'module> {
                 self.sequence(expressions)
             }
 
-            TypedExpr::Assignment { value, pattern, .. } => self.assignment(value, pattern),
+            TypedExpr::Assignment {
+                value,
+                pattern,
+                typ,
+                ..
+            } => self.assignment(value, pattern, typ),
 
             TypedExpr::Try {
                 value,
@@ -172,7 +178,6 @@ impl<'module> Generator<'module> {
     }
 
     fn bit_string<'a>(&mut self, segments: &'a [TypedExprBitStringSegment]) -> Output<'a> {
-
         use BitStringSegmentOption as Opt;
 
         // Collect all the values used in segments.
@@ -189,19 +194,13 @@ impl<'module> Generator<'module> {
                 }
 
                 // Floats
-                [Opt::Float { .. }] => {
-                    Ok(docvec!["float64Bits(", value, ")"])
-                }
+                [Opt::Float { .. }] => Ok(docvec!["float64Bits(", value, ")"]),
 
                 // UTF8 strings
-                [Opt::Utf8 { .. }] => {
-                    Ok(docvec!["stringBits(", value, ")"])
-                }
+                [Opt::Utf8 { .. }] => Ok(docvec!["stringBits(", value, ")"]),
 
                 // UTF8 codepoints
-                [Opt::Utf8Codepoint { .. }] => {
-                    Ok(docvec!["codepointBits(", value, ")"])
-                }
+                [Opt::Utf8Codepoint { .. }] => Ok(docvec!["codepointBits(", value, ")"]),
 
                 // Bit strings
                 [Opt::BitString { .. }] => Ok(docvec![value, ".buffer"]),
@@ -309,7 +308,9 @@ impl<'module> Generator<'module> {
     fn variable<'a>(&mut self, name: &'a str, constructor: &'a ValueConstructor) -> Document<'a> {
         match &constructor.variant {
             ValueConstructorVariant::Record { arity, .. } => {
-                self.record_constructor(constructor.type_.clone(), None, name, *arity)
+                let mn = self.module_name.join("_");
+                let ret = self.record_constructor(constructor.type_.clone(), Some(mn), name, *arity);
+                ret
             }
             ValueConstructorVariant::ModuleFn { .. }
             | ValueConstructorVariant::ModuleConstant { .. }
@@ -320,7 +321,7 @@ impl<'module> Generator<'module> {
     fn record_constructor<'a>(
         &mut self,
         type_: Arc<Type>,
-        qualifier: Option<&'a str>,
+        qualifier: Option<String>,
         name: &'a str,
         arity: u16,
     ) -> Document<'a> {
@@ -337,7 +338,7 @@ impl<'module> Generator<'module> {
             "undefined".to_doc()
         } else if arity == 0 {
             match qualifier {
-                Some(module) => docvec!["new ", module, ".", name, "()"],
+                Some(module) => docvec!["new ", Document::String(module), ".", name, "()"],
                 None => docvec!["new ", name, "()"],
             }
         } else {
@@ -450,17 +451,21 @@ impl<'module> Generator<'module> {
         Ok(docs.to_doc().force_break())
     }
 
-    fn assignment<'a>(&mut self, value: &'a TypedExpr, pattern: &'a TypedPattern) -> Output<'a> {
+    fn assignment<'a>(
+        &mut self,
+        value: &'a TypedExpr,
+        pattern: &'a TypedPattern,
+        typ: &Arc<Type>,
+    ) -> Output<'a> {
         // If it is a simple assignment to a variable we can generate a normal
         // JS assignment
         if let TypedPattern::Var { name, .. } = pattern {
             // Subject must be rendered before the variable for variable numbering
             let subject = self.not_in_tail_position(|gen| gen.wrap_expression(value))?;
-            let name = self.next_local_var(name);
+            let name_a = self.next_local_var(name).to_pretty_string(120);
             return Ok(if self.tail_position {
                 docvec![
-                    "let ",
-                    name.clone(),
+                    type_signature_var(typ, name_a.clone()),
                     " = ",
                     subject,
                     ";",
@@ -470,7 +475,7 @@ impl<'module> Generator<'module> {
                     ";"
                 ]
             } else {
-                docvec!["let ", name, " = ", subject, ";"]
+                docvec![type_signature_var(typ, name_a), " = ", subject, ";"]
             }
             .force_break());
         }
@@ -635,7 +640,7 @@ impl<'module> Generator<'module> {
             "case_no_match",
             "No case clause matched",
             location,
-            [("values", array(subjects.into_iter().map(Ok))?)],
+           // [("values", array(subjects.into_iter().map(Ok))?)],
         ))
     }
 
@@ -644,7 +649,7 @@ impl<'module> Generator<'module> {
             "assignment_no_match",
             "Assignment pattern did not match",
             location,
-            [("value", subject)],
+           // [("value", subject)],
         ))
     }
 
@@ -676,7 +681,7 @@ impl<'module> Generator<'module> {
                 constructor: ModuleValueConstructor::Record { name, .. },
                 module_alias,
                 ..
-            } => Ok(self.wrap_return(construct_record(Some(module_alias), name, arguments))),
+            } => Ok(self.wrap_return(construct_record(Some(module_alias.to_string()), name, arguments))),
 
             // Record construction
             TypedExpr::Var {
@@ -694,7 +699,7 @@ impl<'module> Generator<'module> {
                     } else if name == "Error" {
                     }
                 }
-                Ok(self.wrap_return(construct_record(None, name, arguments)))
+                Ok(self.wrap_return(construct_record(Some(self.module_name.join("_")), name, arguments)))
             }
 
             // Tail call optimisation. If we are calling the current function
@@ -734,7 +739,7 @@ impl<'module> Generator<'module> {
                 Ok(docs.to_doc())
             }
 
-            _ => {
+            a => {
                 let fun = self.not_in_tail_position(|gen| {
                     let is_fn_literal = matches!(fun, TypedExpr::Fn { .. });
                     let fun = gen.wrap_expression(fun)?;
@@ -745,46 +750,93 @@ impl<'module> Generator<'module> {
                     }
                 })?;
                 let arguments = call_arguments(arguments.into_iter().map(Ok))?;
-                Ok(self.wrap_return(docvec![fun, arguments]))
+                Ok(self.wrap_return(docvec![Document::String(format!("")), fun, arguments]))
             }
         }
     }
 
-    fn fn_<'a>(&mut self, arguments: &'a [TypedArg], body: &'a TypedExpr) -> Output<'a> {
-        // New function, this is now the tail position
-        let tail = self.tail_position;
-        self.tail_position = true;
-        // And there's a new scope
-        let scope = self.current_scope_vars.clone();
-        for name in arguments.iter().flat_map(Arg::get_variable_name) {
-            let _ = self.current_scope_vars.insert(name.to_string(), 0);
+    fn fn_<'a>(&mut self, expression: &'a TypedExpr) -> Output<'a> {
+        let index = self.anon_functions.len();
+
+        self.anon_functions.push(expression.clone());
+        Ok(docvec!["&", "__anon", index.to_doc()])
+    }
+
+    pub fn emit_anon_fn_sig<'a>(&mut self, expression: &'a TypedExpr, index: usize) -> Output<'a> {
+        match expression {
+            crate::ast::TypedExpr::Fn {
+                args: arguments,
+                body,
+                typ,
+                ..
+            } => {
+                let ret = match typ.as_ref() {
+                    crate::type_::Type::Fn { retrn: ret, .. } => Ok(ret),
+                    _ => todo!(),
+                }?;
+
+                Ok(docvec!(
+                    type_signature(&ret),
+                    " __anon",
+                    index.to_doc(),
+                    fun_args(&arguments[..], false),
+                    ";",
+                ))
+            }
+            _ => todo!(),
         }
+    }
 
-        // This is a new function so unset the recorded name so that we don't
-        // mistakenly trigger tail call optimisation
-        let mut name = None;
-        std::mem::swap(&mut self.function_name, &mut name);
 
-        // Generate the function body
-        let result = self.expression(body);
+    pub fn emit_anon_fn<'a>(&mut self, expression: &'a TypedExpr, index: usize) -> Output<'a> {
+        match expression {
+            crate::ast::TypedExpr::Fn {
+                args: arguments,
+                body,
+                typ,
+                ..
+            } => {
+                // New function, this is now the tail position
+                let tail = self.tail_position;
+                self.tail_position = true;
+                // And there's a new scope
+                let scope = self.current_scope_vars.clone();
+                for name in arguments.iter().flat_map(Arg::get_variable_name) {
+                    let _ = self.current_scope_vars.insert(name.to_string(), 0);
+                }
 
-        // Reset function name, scope, and tail position tracking
-        self.tail_position = tail;
-        self.current_scope_vars = scope;
-        std::mem::swap(&mut self.function_name, &mut name);
+                // This is a new function so unset the recorded name so that we don't
+                // mistakenly trigger tail call optimisation
+                let mut name = None;
+                std::mem::swap(&mut self.function_name, &mut name);
 
-        Ok(docvec!(
-            docvec!(
-                fun_args(arguments, false),
-                " => {",
-                break_("", " "),
-                result?
-            )
-            .nest(INDENT)
-            .append(break_("", " "))
-            .group(),
-            "}",
-        ))
+                // Generate the function body
+                let result = self.expression(body);
+
+                // Reset function name, scope, and tail position tracking
+                self.tail_position = tail;
+                self.current_scope_vars = scope;
+                std::mem::swap(&mut self.function_name, &mut name);
+
+                let ret = match typ.as_ref() {
+                    crate::type_::Type::Fn { retrn: ret, .. } => Ok(ret),
+                    _ => todo!(),
+                }?;
+
+                Ok(docvec!(
+                    type_signature(&ret),
+                    " __anon",
+                    index.to_doc(),
+                    fun_args(&arguments[..], false),
+                    "{",
+                    line(),
+                    result?.nest(INDENT),
+                    line(),
+                    "}",
+                ))
+            }
+            _ => todo!(),
+        }
     }
 
     fn record_access<'a>(&mut self, record: &'a TypedExpr, label: &'a str) -> Output<'a> {
@@ -924,7 +976,7 @@ impl<'module> Generator<'module> {
         let message = message
             .as_deref()
             .unwrap_or("This has not yet been implemented");
-        let doc = self.throw_error("todo", message, *location, vec![]);
+        let doc = self.throw_error("todo", message, *location);
 
         // Reset tail position so later values are returned as needed. i.e.
         // following clauses in a case expression.
@@ -933,15 +985,13 @@ impl<'module> Generator<'module> {
         doc
     }
 
-    fn throw_error<'a, Fields>(
+    fn throw_error<'a>(
         &mut self,
         error_name: &'a str,
         message: &'a str,
         location: SrcSpan,
-        fields: Fields,
+       // fields: Fields,
     ) -> Document<'a>
-    where
-        Fields: IntoIterator<Item = (&'a str, Document<'a>)>,
     {
         let module = Document::String(self.module_name.join("/")).surround('"', '"');
         // TODO switch to use `string(self.function_name)`
@@ -950,7 +1000,7 @@ impl<'module> Generator<'module> {
         let function = Document::String(self.function_name.unwrap_or_default().to_string())
             .surround("\"", "\"");
         let line = self.line_numbers.line_number(location.start).to_doc();
-        let fields = wrap_object(fields.into_iter().map(|(k, v)| (k.to_doc(), Some(v))));
+       // let fields = wrap_object(fields.into_iter().map(|(k, v)| (k.to_doc(), Some(v))));
         docvec![
             "throwError",
             wrap_args([
@@ -959,7 +1009,7 @@ impl<'module> Generator<'module> {
                 line,
                 function,
                 string(message),
-                fields
+        //        fields
             ]),
             ";"
         ]
@@ -978,7 +1028,7 @@ impl<'module> Generator<'module> {
 
             ModuleValueConstructor::Record {
                 name, arity, type_, ..
-            } => self.record_constructor(type_.clone(), Some(module), name, *arity),
+            } => self.record_constructor(type_.clone(), Some(module.to_string()), name, *arity),
         }
     }
 
@@ -1075,22 +1125,15 @@ pub fn float(value: &str) -> Document<'_> {
     value.to_doc()
 }
 
-pub(crate) fn constant_expression<'a>(
-    expression: &'a TypedConstant,
-) -> Output<'a> {
+pub(crate) fn constant_expression<'a>(expression: &'a TypedConstant) -> Output<'a> {
     match expression {
         Constant::Int { value, .. } => Ok(int(value)),
         Constant::Float { value, .. } => Ok(float(value)),
-        Constant::String { value, .. } => Ok(string(value)),
-        Constant::Tuple { elements, .. } => {
-            array(elements.iter().map(|e| constant_expression(e)))
-        }
+        Constant::String { value, .. } => Ok(docvec!["something ", string(value)]),
+        Constant::Tuple { elements, .. } => array(elements.iter().map(|e| constant_expression(e))),
 
         Constant::List { elements, .. } => {
-            list(
-                elements.iter().map(|e| constant_expression(e)),
-                None,
-            )
+            list(elements.iter().map(|e| constant_expression(e)), None)
         }
 
         Constant::Record { typ, name, .. } if typ.is_bool() && name == "True" => {
@@ -1117,7 +1160,7 @@ pub(crate) fn constant_expression<'a>(
                 .iter()
                 .map(|arg| constant_expression(&arg.value))
                 .try_collect()?;
-            Ok(construct_record(module.as_deref(), tag, field_values))
+            Ok(construct_record(module.clone(), tag, field_values))
         }
 
         Constant::BitString { location, .. } => Err(Error::Unsupported {
@@ -1179,7 +1222,7 @@ fn call_arguments<'a, Elements: IntoIterator<Item = Output<'a>>>(elements: Eleme
 }
 
 fn construct_record<'a>(
-    module: Option<&'a str>,
+    module: Option<String>,
     name: &'a str,
     arguments: impl IntoIterator<Item = Document<'a>>,
 ) -> Document<'a> {
@@ -1193,14 +1236,14 @@ fn construct_record<'a>(
     ));
     let arguments = docvec![break_("", ""), arguments].nest(INDENT);
     let name = if let Some(module) = module {
-        docvec!["$", module, ".", name]
+        docvec![Document::String(module), "_", name]
     } else {
-        name.to_doc()
+        docvec![Document::String("hell why".to_string()), ".", name]
     };
     if any_arguments {
-        docvec!["new ", name, "(", arguments, break_(",", ""), ")"].group()
+        docvec![name, "_constructor(", arguments, break_(",", ""), ")"].group()
     } else {
-        docvec!["new ", name, "()"]
+        docvec!["TODO(single item constructors should be an atom)"]
     }
 }
 

@@ -2177,9 +2177,8 @@ Fix the warnings and try again."
                         extra_labels: vec![],
                     }),
                 },
-                crate::c::Error::ImaTooLazyToDoc { } => todo!(),
-             } 
-
+                crate::c::Error::ImaTooLazyToDoc {} => todo!(),
+            },
 
             Error::JavaScript { src, path, error } => match error {
                 javascript::Error::Unsupported { feature, location } => Diagnostic {

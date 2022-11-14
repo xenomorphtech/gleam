@@ -250,9 +250,7 @@ impl<'module_ctx, 'expression_gen, 'a> Generator<'module_ctx, 'expression_gen, '
                 docvec!(self.guard(tuple)?, "[", index, "]")
             }
 
-            ClauseGuard::Constant(constant) => {
-                return expression::constant_expression(constant)
-            }
+            ClauseGuard::Constant(constant) => return expression::constant_expression(constant),
         })
     }
 

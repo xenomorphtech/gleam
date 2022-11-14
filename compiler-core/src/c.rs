@@ -17,10 +17,10 @@
 //}
 //
 //}
+mod expression;
 mod pattern;
 #[cfg(test)]
 mod tests;
-mod expression;
 
 use std::path::Path;
 
@@ -31,14 +31,19 @@ use itertools::Itertools;
 const INDENT: isize = 2;
 
 pub const PRELUDE: &str = include_str!("../templates/prelude.js");
-
+pub const MODULEPRELUDE: &str = r#"
+#include "gleam.h"
+"#;
 pub type Output<'a> = Result<Document<'a>, Error>;
+
+type TypedExternalFnArg = ExternalFnArg<std::sync::Arc<crate::type_::Type>>;
 
 #[derive(Debug)]
 pub struct Generator<'a> {
     line_numbers: &'a LineNumbers,
     module: &'a TypedModule,
     module_scope: im::HashMap<String, usize>,
+    anon_functions: Vec<TypedExpr>,
 }
 
 impl<'a> Generator<'a> {
@@ -47,10 +52,11 @@ impl<'a> Generator<'a> {
             line_numbers,
             module,
             module_scope: Default::default(),
+            anon_functions: Default::default(),
         }
     }
 
-    pub fn compile(&mut self) -> Output<'a> {
+    pub fn compile(&'a mut self) -> Output<'a> {
         // Determine what JavaScript imports we need to generate
         // let mut imports = self.collect_imports();
 
@@ -59,20 +65,43 @@ impl<'a> Generator<'a> {
         // names.
         //self.register_module_definitions_in_scope();
 
+        let declarations = self.collect_declarations().into_iter();
+        let mut declarations: Vec<_> = declarations.try_collect()?;
+
+
         // Generate C code for each statement
-        let statements = self.collect_definitions().into_iter();
-        let mut statements: Vec<_> =
-            statements.try_collect()?;
+        let statements = self.collect_definitions().into_iter().chain(
+            self.module
+                .statements
+                .iter()
+                .flat_map(|s| self.statement(s)),
+        );
 
+        let mut statements: Vec<_> = Itertools::intersperse(statements, Ok(lines(2))).try_collect()?;
 
-       // .into_iter().chain(
-       //     self.module
-       //         .statements
-       //         .iter()
-       //         .flat_map(|s| self.statement(s)),
-       // );
+        let mut ts = [].to_vec();
+        let mut generator = expression::Generator::new(
+            &self.module.name,
+            self.line_numbers,
+            "",
+            [].to_vec(),
+            self.module_scope.clone(),
+            &mut ts,
+        );
+        //unroll annonymous functions
+        let annon: Vec<_> = self
+            .anon_functions
+            .iter()
+            .map(|s| generator.emit_anon_fn(s, 0).expect("work"))
+            .collect();
 
-        Ok(docvec![statements])
+        let annon_signatures: Vec<_> = self
+            .anon_functions
+            .iter()
+            .map(|s| generator.emit_anon_fn_sig(s, 0).expect("work"))
+            .collect();
+
+        Ok(docvec![MODULEPRELUDE, line(), declarations, line(), annon_signatures, line(), statements, line(), annon, line()])
     }
 
     pub fn statement(&mut self, statement: &'a TypedStatement) -> Vec<Output<'a>> {
@@ -97,23 +126,59 @@ impl<'a> Generator<'a> {
                 name,
                 body,
                 public,
+                return_type,
                 ..
-            } => vec![self.module_function(*public, name, arguments, body)],
+            } => vec![self.module_function(*public, name, arguments, body, return_type)],
+
+//        location: SrcSpan,
+//        public: bool,
+//        arguments: Vec<ExternalFnArg<T>>,
+//        name: String,
+//        return_: TypeAst,
+//        return_type: T,
+//        module: String,
+//        fun: String,
+//        doc: Option<String>,
 
             Statement::ExternalFn {
                 public,
                 name,
                 arguments,
+                return_type,
                 module,
                 fun,
                 ..
             } if module.is_empty() => vec![
-            //    Ok(self.global_external_function(*public, name, arguments, fun))
+                Ok(self.global_external_function(*public, name, arguments, fun, module, return_type.as_ref()))
             ],
 
             Statement::ExternalFn { .. } => vec![],
         }
     }
+
+
+//              Ok(self.global_external_function(*public, name, arguments, fun, module, return_type))
+
+    fn global_external_function(
+        &mut self,
+        public: bool,
+        name: &'a str,
+        arguments: &'a [TypedExternalFnArg],
+        fun: &'a str,
+        module: &'a str,
+        return_type: &'a crate::type_::Type,
+    ) -> Document<'a> {
+        let args = external_fn_args(arguments.clone(), true);
+        let fun = if name == fun {
+            docvec![ fun]
+        } else {
+            fun.to_doc()
+        };
+        let body = docvec!["return ", fun, external_fn_args(arguments, false), ";"];
+        let body = docvec![line(), body].nest(INDENT).group();
+        docvec![type_signature(return_type), " ", Document::String(self.module.name.join("_")), "_", name, args, " {", body, line(), "}"]
+    }
+
 
     fn module_function(
         &mut self,
@@ -121,6 +186,7 @@ impl<'a> Generator<'a> {
         name: &'a str,
         args: &'a [TypedArg],
         body: &'a TypedExpr,
+        retrn: &'a crate::type_::Type,
     ) -> Output<'a> {
         let argument_names = args
             .iter()
@@ -132,23 +198,67 @@ impl<'a> Generator<'a> {
             name,
             argument_names,
             self.module_scope.clone(),
+            &mut self.anon_functions,
         );
-        let head = if public {
-            "void "
-        } else {
-            "void "
-        };
         let body = generator.function_body(body, args)?;
         Ok(docvec![
-            head,
+            type_signature(retrn),
+            " ",
             maybe_escape_identifier_doc(name),
             fun_args(args, generator.tail_recursion_used),
             " {",
             docvec![line(), body].nest(INDENT).group(),
             line(),
             "}",
+            line(),
         ])
     }
+
+    fn collect_declarations(&mut self) -> Vec<Output<'a>> {
+        self.module
+            .statements
+            .iter()
+            .flat_map(|statement| match statement {
+                Statement::CustomType {
+                    public,
+                    constructors,
+                    opaque,
+                    ..
+                } => 
+
+                {
+        let ret: Vec<Output<'a>> = constructors
+            .iter()
+            .map(|constructor| Ok(self.record_declaration(constructor, *public, *opaque)))
+            .collect();
+        ret
+                }
+
+                Statement::Fn { .. }
+                | Statement::TypeAlias { .. }
+                | Statement::ExternalFn { .. }
+                | Statement::ExternalType { .. }
+                | Statement::Import { .. }
+                | Statement::ModuleConstant { .. } => vec![],
+            })
+            .collect()
+    }
+
+    fn record_declaration(
+        &self,
+        constructor: &'a TypedRecordConstructor,
+        public: bool,
+        opaque: bool,
+    ) -> Document<'a> {
+    //docvec!["TODO(release other types)", line()]
+        let constructor_name = docvec![Document::String(format!(
+            "{}_{}",
+            self.module.name.join("_"),
+            constructor.name
+        ))];
+
+      docvec!["typedef struct ", constructor_name.clone()," ", constructor_name,  ";", line() ]
+ }
 
     fn collect_definitions(&mut self) -> Vec<Output<'a>> {
         self.module
@@ -184,32 +294,71 @@ impl<'a> Generator<'a> {
             .collect()
     }
 
+    fn release_type(&self, type_: &crate::type_::Type) -> Document<'a> {
+        match type_ {
+            crate::type_::Type::App {
+                module: m, name: n, ..
+            } if m.len() == 0 && n.eq("String") => {
+                docvec!["gleamString_release"]
+            }
+            crate::type_::Type::App {
+                module: m, name: n, ..
+            } if m.len() == 0 && n.eq("Int") => docvec!["dont_release"],
+            crate::type_::Type::App {
+                module: m, name: n, ..
+            } if m.len() == 0 && n.eq("Float") => docvec!["dont_release"],
+            crate::type_::Type::App {
+                module: m, name: n, ..
+            } => docvec![Document::String(format!("{:?}{}release", m, n))],
+            _ => docvec!["TODO(release other types)"],
+        }
+    }
+
     fn record_definition(
         &self,
         constructor: &'a TypedRecordConstructor,
         public: bool,
         opaque: bool,
     ) -> Document<'a> {
-        fn parameter((i, arg): (usize, &TypedRecordConstructorArg)) -> Document<'_> {
+        fn parameter<'a>((i, arg): (usize, &'a TypedRecordConstructorArg)) -> Document<'a> {
             arg.label
                 .as_ref()
-                .map(|s| maybe_escape_identifier_doc(s))
-                .unwrap_or_else(|| Document::String(format!("x{}", i)))
+                .map(|s| docvec![maybe_escape_identifier_doc(s)])
+                .unwrap_or_else(|| docvec![Document::String(format!("x{}", i))])
         }
 
-        let head = if public && !opaque {
-            "export class "
-        } else {
-            "class "
-        };
-        let head = docvec![head, &constructor.name, " extends $CustomType {"];
+        let constructor_name = docvec![Document::String(format!(
+            "{}_{}",
+            self.module.name.join("_"),
+            constructor.name
+        ))];
 
-        if constructor.arguments.is_empty() {
-            return head.append("}");
-        };
+        let type_body = concat(Itertools::intersperse(
+            constructor
+                .arguments
+                .iter()
+                .enumerate()
+                .map(|param| docvec![record_parameter(param), ";"]),
+            docvec![line()],
+        ));
+
+        let typedef = docvec![
+            "struct ",
+            constructor_name.clone(),
+            " {",
+            docvec![line(), "int refcount;", line(), type_body].nest(INDENT),
+            line(),
+            "} ",
+            ";",
+            line()
+        ];
 
         let parameters = concat(Itertools::intersperse(
-            constructor.arguments.iter().enumerate().map(parameter),
+            constructor
+                .arguments
+                .iter()
+                .enumerate()
+                .map(record_parameter),
             break_(",", ", "),
         ));
 
@@ -217,28 +366,76 @@ impl<'a> Generator<'a> {
             constructor.arguments.iter().enumerate().map(|(i, arg)| {
                 let var = parameter((i, arg));
                 match &arg.label {
-                    None => docvec!["this[", i, "] = ", var, ";"],
-                    Some(name) => docvec!["this.", name, " = ", var, ";"],
+                    None => todo!(),
+                    Some(name) => docvec!["this->", name, " = ", var, ";"],
                 }
             }),
             line(),
         ));
 
-        let class_body = docvec![
+        let constructor_doc = docvec![
             line(),
-            "constructor(",
+            constructor_name.clone(),
+            "* ",
+            constructor_name.clone(),
+            "_constructor(",
             parameters,
             ") {",
-            docvec![line(), "super();", line(), constructor_body].nest(INDENT),
+            docvec![
+                line(),
+                constructor_name.clone(),
+                "* this = malloc(sizeof(",
+                constructor_name.clone(),
+                "));",
+                line(),
+                "this->refcount = 1;",
+                line(),
+                constructor_body.clone(),
+                line(),
+                "return this;",
+            ]
+            .nest(INDENT),
             line(),
             "}",
-        ]
-        .nest(INDENT);
+        ];
 
-        docvec![head, class_body, line(), "}"]
+        let release_body = concat(Itertools::intersperse(
+            constructor.arguments.iter().enumerate().map(|(i, arg)| {
+                let var = record_parameter((i, arg));
+                match &arg.label {
+                    None => todo!(),
+                    Some(name) => {
+                        //release by arg type
+                        docvec![self.release_type(&arg.type_), "(this->", name, ");"]
+                    }
+                }
+            }),
+            line(),
+        ));
+
+        let release = docvec![
+            line(),
+            "void ",
+            constructor_name.clone(),
+            "_release(",
+            constructor_name.clone(),
+            " * this) {",
+            docvec![
+                line(),
+                "int remaining = this->refcount - 1;",
+                line(),
+                "if (remaining == 0) {",
+                docvec![line(), release_body].nest(INDENT),
+                line(),
+                "}",
+            ]
+            .nest(INDENT),
+            line(),
+            "}",
+        ];
+
+        docvec![typedef, line(), constructor_doc, line(), release, line(),]
     }
-
-
 }
 
 pub fn module(
@@ -261,10 +458,10 @@ pub fn module(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
     Unsupported { feature: String, location: SrcSpan },
-    ImaTooLazyToDoc 
+    ImaTooLazyToDoc,
 }
 
-fn fun_args(args: &'_ [TypedArg], tail_recursion_used: bool) -> Document<'_> {
+fn fun_args<'a>(args: &'a [TypedArg], tail_recursion_used: bool) -> Document<'a> {
     let mut discards = 0;
     wrap_args(args.iter().map(|a| match a.get_variable_name() {
         None => {
@@ -277,7 +474,7 @@ fn fun_args(args: &'_ [TypedArg], tail_recursion_used: bool) -> Document<'_> {
             doc
         }
         Some(name) if tail_recursion_used => Document::String(format!("loop${}", name)),
-        Some(name) => maybe_escape_identifier_doc(name),
+        Some(name) => docvec![type_signature(a.type_.as_ref()), " ", maybe_escape_identifier_doc(name)],
     }))
 }
 
@@ -418,6 +615,102 @@ fn maybe_escape_identifier_doc(word: &str) -> Document<'_> {
     } else {
         Document::String(escape_identifier(word))
     }
+}
+
+fn record_parameter<'a>((i, arg): (usize, &'a TypedRecordConstructorArg)) -> Document<'a> {
+    arg.label
+        .as_ref()
+        .map(|s| {
+            docvec![
+                type_signature(&arg.type_),
+                " ",
+                maybe_escape_identifier_doc(s)
+            ]
+        })
+        .unwrap_or_else(|| {
+            docvec![
+                type_signature(&arg.type_),
+                " ",
+                Document::String(format!("x{}", i))
+            ]
+        })
+}
+fn type_signature<'a>(type_: &crate::type_::Type) -> Document<'a> {
+    match type_ {
+        crate::type_::Type::App {
+            module: m, name: n, ..
+        } if m.len() == 0 && n.eq("String") => {
+            docvec!["gleamString * "]
+        }
+        crate::type_::Type::App {
+            module: m, name: n, ..
+        } if m.len() == 0 && n.eq("Int") => docvec!["int64_t"],
+        crate::type_::Type::App {
+            module: m, name: n, ..
+        } if m.len() == 0 && n.eq("Float") => docvec!["double"],
+        crate::type_::Type::App {
+            module: m, name: n, ..
+        } => docvec![Document::String(format!("{}_{} * ", m.join("_"), n))],
+        a => docvec![Document::String(format!(
+            "TODO(release other types {:?})",
+            a
+        ))],
+    }
+}
+fn type_signature_var<'a>(type_: &crate::type_::Type, name: String) -> Document<'a> {
+    let name_d = Document::String(name.clone());
+    match type_ {
+        crate::type_::Type::App {
+            module: m, name: n, ..
+        } if m.len() == 0 && n.eq("String") => {
+            docvec!["gleamString * ", name_d.clone()]
+        }
+        crate::type_::Type::App {
+            module: m, name: n, ..
+        } if m.len() == 0 && n.eq("Int") => docvec!["int64_t ", name_d.clone()],
+        crate::type_::Type::App {
+            module: m, name: n, ..
+        } if m.len() == 0 && n.eq("Float") => docvec!["double ", name_d.clone()],
+        crate::type_::Type::App {
+            module: m, name: n, ..
+        } => docvec![Document::String(format!(
+            "{}_{} * {}",
+            m.join("_"),
+            n,
+            name
+        ))],
+        crate::type_::Type::Fn { .. } => match type_ {
+            crate::type_::Type::Fn { retrn, .. } => docvec![
+                type_signature(retrn),
+                " ",
+                Document::String(format!("(*{name})()"))
+            ],
+            _ => todo!(),
+        },
+        a => {
+            docvec![Document::String(format!("{a:?} {name}"))]
+        }
+    }
+}
+
+fn external_fn_args(arguments: &[TypedExternalFnArg], type_em: bool) -> Document<'_> {
+    wrap_args(
+        arguments
+            .iter()
+            .enumerate()
+            .map(|(index, ExternalFnArg { label, type_, .. })| {
+                let type_ = if type_em {
+                   docvec![type_signature(type_) , " "]
+                }
+                else {
+                   docvec![]
+                };
+                label
+                    .as_ref()
+                    .map(|l| docvec![type_.clone() , l.to_doc() ])
+                    .unwrap_or_else(|| docvec![type_, Document::String(format!("arg{}", index))])
+            }),
+    )
 }
 
 
