@@ -197,10 +197,10 @@ pub fn records_2(module: &TypedModule) -> Vec<String> {
 
 pub fn record_definition_2(g_name: &str, fields: &[(&str, Arc<Type>)]) -> String {
     let name = &g_name.to_snake_case();
-    let type_printer = TypePrinter::new("").var_as_any();
+    let type_printer = TypePrinterStruct::new("").var_as_any();
     let fields = fields.iter().map(move |(name, type_)| {
         let type_ = type_printer.print(type_);
-        docvec!(atom((*name).to_string()))
+        docvec!("{", atom((*name).to_string()), ", ", type_.group(), "}")
     });
 
     let fields = break_("", "")
@@ -2095,6 +2095,121 @@ impl<'a> TypePrinter<'a> {
             .append(") -> ")
             .append(retrn)
             .append(")")
+    }
+
+    /// Print type vars as `any()`.
+    fn var_as_any(mut self) -> Self {
+        self.var_as_any = true;
+        self
+    }
+}
+
+#[derive(Debug)]
+struct TypePrinterStruct<'a> {
+    var_as_any: bool,
+    current_module: &'a str,
+    var_usages: Option<&'a HashMap<u64, u64>>,
+}
+
+impl<'a> TypePrinterStruct<'a> {
+    fn new(current_module: &'a str) -> Self {
+        Self {
+            current_module,
+            var_usages: None,
+            var_as_any: false,
+        }
+    }
+
+    pub fn with_var_usages(mut self, var_usages: &'a HashMap<u64, u64>) -> Self {
+        self.var_usages = Some(var_usages);
+        self
+    }
+
+    pub fn print(&self, type_: &Type) -> Document<'static> {
+        match type_ {
+            Type::Var { type_: typ } => self.print_var(&typ.borrow()),
+
+            Type::App {
+                name, module, args, ..
+            } if module.is_empty() => self.print_prelude_type(name, args),
+
+            Type::App {
+                name, module, args, ..
+            } => self.print_type_app(module, name, args),
+
+            Type::Fn { args, retrn } => self.print_fn(args, retrn),
+
+            Type::Tuple { elems } => tuple(elems.iter().map(|e| self.print(e))),
+        }
+    }
+
+    fn print_var(&self, type_: &TypeVar) -> Document<'static> {
+        match type_ {
+            TypeVar::Generic { .. } | TypeVar::Unbound { .. } if self.var_as_any => {
+                "any".to_doc()
+            }
+            TypeVar::Generic { id, .. } | TypeVar::Unbound { id, .. } => match &self.var_usages {
+                Some(usages) => match usages.get(id) {
+                    Some(&0) => nil(),
+                    Some(&1) => "any".to_doc(),
+                    _ => id_to_type_var(*id),
+                },
+                None => id_to_type_var(*id),
+            },
+            TypeVar::Link { type_: typ } => self.print(typ),
+        }
+    }
+
+    fn print_prelude_type(&self, name: &str, args: &[Arc<Type>]) -> Document<'static> {
+        match name {
+            "Nil" => "nil".to_doc(),
+            "Int" | "UtfCodepoint" => "integer".to_doc(),
+            "String" => "binary".to_doc(),
+            "Bool" => "boolean".to_doc(),
+            "Float" => "float".to_doc(),
+            "BitString" => "bitstring".to_doc(),
+            "List" => {
+                let arg0 = self.print(args.get(0).expect("print_prelude_type list"));
+                "{list, ".to_doc().append(arg0).append("}")
+            }
+            "Result" => {
+                let arg_ok = self.print(args.get(0).expect("print_prelude_type result ok"));
+                let arg_err = self.print(args.get(1).expect("print_prelude_type result err"));
+                let ok = tuple(["ok".to_doc(), arg_ok]);
+                let error = tuple(["error".to_doc(), arg_err]);
+                docvec![ok, break_(" |", " | "), error].nest(INDENT).group()
+            }
+            // Getting here sholud mean we either forgot a built-in type or there is a
+            // compiler error
+            name => panic!("{name} is not a built-in type."),
+        }
+    }
+
+    fn print_type_app(&self, module: &str, name: &str, args: &[Arc<Type>]) -> Document<'static> {
+        let args = concat(Itertools::intersperse(
+            args.iter().map(|a| self.print(a)),
+            ", ".to_doc(),
+        ));
+        let name = Document::String(erl_safe_type_name(name.to_snake_case()));
+        if self.current_module == module {
+            docvec!["{ custom, ", module_name_atom(module), ",", name,  "}"]
+        } else {
+            docvec!["{ custom, ", module_name_atom(module), ",", name,  "}"]
+        }
+    }
+
+    fn print_fn(&self, args: &[Arc<Type>], retrn: &Type) -> Document<'static> {
+        let args = concat(Itertools::intersperse(
+            args.iter().map(|a| self.print(a)),
+            ", ".to_doc(),
+        ));
+        let retrn = self.print(retrn);
+        "{fun, \"("
+            .to_doc()
+            .append(args)
+            .append(") -> ")
+            .append(retrn)
+            .append("\"}")
     }
 
     /// Print type vars as `any()`.
