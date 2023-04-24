@@ -3,6 +3,4 @@ pub fn add(a, b) {
 }
 
 pub fn main() {
-  1
-  |> add()
 }

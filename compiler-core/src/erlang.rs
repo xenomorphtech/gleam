@@ -143,6 +143,85 @@ pub fn record_definition(name: &str, fields: &[(&str, Arc<Type>)]) -> String {
     .to_pretty_string(MAX_COLUMNS)
 }
 
+pub fn records_2(module: &TypedModule) -> Vec<String> {
+    module
+        .statements
+        .iter()
+        .filter_map(|s| match s {
+            Statement::CustomType(ct) => Some(ct),
+            _ => None,
+        })
+        .map(
+            |CustomType {
+                 constructors: constructors,
+                 name: tname,
+                 ..
+             }| {
+                let cons = constructors
+                    .iter()
+                    .filter_map(|constructor| {
+                        constructor
+                            .arguments
+                            .iter()
+                            .map(
+                                |RecordConstructorArg {
+                                     label,
+                                     ast: _,
+                                     location: _,
+                                     type_,
+                                     ..
+                                 }| {
+                                    label.as_deref().map(|label| (label, type_.clone()))
+                                },
+                            )
+                            .collect::<Option<Vec<_>>>()
+                            .map(|fields| (constructor.name.as_str(), fields))
+                    })
+                    .map(|(name, fields)| record_definition_2(name, &fields).to_string());
+                docvec!(
+                    "<<\"",
+                    tname.to_string(),
+                    "\">> => [",
+                    concat(Itertools::intersperse(
+                        cons.map(|c| Document::String(c)),
+                        break_(",", ", ")
+                    )),
+                    "]",
+                    line()
+                )
+                .to_pretty_string(MAX_COLUMNS)
+            },
+        )
+        .collect()
+}
+
+pub fn record_definition_2(g_name: &str, fields: &[(&str, Arc<Type>)]) -> String {
+    let name = &g_name.to_snake_case();
+    let type_printer = TypePrinter::new("").var_as_any();
+    let fields = fields.iter().map(move |(name, type_)| {
+        let type_ = type_printer.print(type_);
+        docvec!(atom((*name).to_string()))
+    });
+
+    let fields = break_("", "")
+        .append(concat(Itertools::intersperse(fields, break_(",", ", "))))
+        .nest(INDENT)
+        .append(break_("", ""))
+        .group();
+
+    docvec!(
+        "{",
+        atom(name.to_string()),
+        ", <<\"",
+        g_name.to_string(),
+        "\">>, [",
+        fields,
+        "]}",
+        line()
+    )
+    .to_pretty_string(MAX_COLUMNS)
+}
+
 pub fn module<'a>(module: &'a TypedModule, line_numbers: &'a LineNumbers) -> Result<String> {
     Ok(module_document(module, line_numbers)?.to_pretty_string(MAX_COLUMNS))
 }
@@ -170,6 +249,8 @@ fn module_document<'a>(
             &module.name,
         );
     }
+
+    exports.push("gleam_info/0".to_doc());
 
     let exports = match (!exports.is_empty(), !type_exports.is_empty()) {
         (false, false) => return Ok(header),
@@ -223,12 +304,19 @@ fn module_document<'a>(
         lines(2),
     ));
 
+    let types = concat(Itertools::intersperse(
+        records_2(module).into_iter().map(|x| Document::String(x)),
+        ",".to_doc(),
+    ));
+    let module_info = docvec!(lines(2), "gleam_info() -> ", line(), "  #{", types, "  }.",);
+
     Ok(header
         .append("-compile([no_auto_import, nowarn_unused_vars]).")
         .append(lines(2))
         .append(exports)
         .append(type_defs)
         .append(statements)
+        .append(module_info)
         .append(line()))
 }
 
