@@ -148,13 +148,13 @@ pub fn records_2(module: &TypedModule) -> Vec<String> {
         .statements
         .iter()
         .filter_map(|s| match s {
-            Statement::CustomType(ct) => Some(ct),
+            ModuleStatement::CustomType(ct) => Some(ct),
             _ => None,
         })
         .map(
             |CustomType {
-                 constructors: constructors,
                  name: tname,
+                 constructors,
                  ..
              }| {
                 let cons = constructors
@@ -2120,11 +2120,6 @@ impl<'a> TypePrinterStruct<'a> {
         }
     }
 
-    pub fn with_var_usages(mut self, var_usages: &'a HashMap<u64, u64>) -> Self {
-        self.var_usages = Some(var_usages);
-        self
-    }
-
     pub fn print(&self, type_: &Type) -> Document<'static> {
         match type_ {
             Type::Var { type_: typ } => self.print_var(&typ.borrow()),
@@ -2186,7 +2181,7 @@ impl<'a> TypePrinterStruct<'a> {
     }
 
     fn print_type_app(&self, module: &str, name: &str, args: &[Arc<Type>]) -> Document<'static> {
-        let args = concat(Itertools::intersperse(
+        let _args = concat(Itertools::intersperse(
             args.iter().map(|a| self.print(a)),
             ", ".to_doc(),
         ));
