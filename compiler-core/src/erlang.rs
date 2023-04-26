@@ -2140,9 +2140,7 @@ impl<'a> TypePrinterStruct<'a> {
 
     fn print_var(&self, type_: &TypeVar) -> Document<'static> {
         match type_ {
-            TypeVar::Generic { .. } | TypeVar::Unbound { .. } if self.var_as_any => {
-                "any".to_doc()
-            }
+            TypeVar::Generic { .. } | TypeVar::Unbound { .. } if self.var_as_any => "any".to_doc(),
             TypeVar::Generic { id, .. } | TypeVar::Unbound { id, .. } => match &self.var_usages {
                 Some(usages) => match usages.get(id) {
                     Some(&0) => nil(),
@@ -2187,9 +2185,9 @@ impl<'a> TypePrinterStruct<'a> {
         ));
         let name = Document::String(erl_safe_type_name(name.to_snake_case()));
         if self.current_module == module {
-            docvec!["{ custom, ", module_name_atom(module), ",", name,  "}"]
+            docvec!["{ custom, ", module_name_atom(module), ",", name, "}"]
         } else {
-            docvec!["{ custom, ", module_name_atom(module), ",", name,  "}"]
+            docvec!["{ custom, ", module_name_atom(module), ",", name, "}"]
         }
     }
 
@@ -2199,7 +2197,7 @@ impl<'a> TypePrinterStruct<'a> {
             ", ".to_doc(),
         ));
         let retrn = self.print(retrn);
-        "{fun, \"("
+        "{function, \"("
             .to_doc()
             .append(args)
             .append(") -> ")
