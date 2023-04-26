@@ -157,12 +157,32 @@ pub fn records_2(module: &TypedModule) -> Vec<String> {
             ModuleStatement::CustomType(CustomType {
                 name,
                 constructors,
+                parameters,
+                typed_parameters,
                 ..
-            }) => Some(render_custom_type(name, constructors)),
+            }) => {
+                let t: Vec<u64> = typed_parameters
+                    .iter()
+                    .filter_map(|type_| match &type_.deref() {
+                        Type::Var { type_: typ } => match *typ.borrow() {
+                            TypeVar::Generic { id, .. } | TypeVar::Unbound { id, .. } => Some(id),
+                            _ => None,
+                        },
+
+                        _ => None,
+                    })
+                    .collect();
+                println!("#{} paramet ids {:#?}", name, t);
+
+                println!("#{} parameters {:#?}", name, parameters);
+                println!("#{} typed_parameters {:#?}", name, typed_parameters);
+                Some(render_custom_type(name, &t, constructors))
+            }
             _ => None,
         })
         .collect()
 }
+
 pub fn render_external(tname: &SmolStr) -> String {
     docvec!(
         "<<\"",
@@ -176,13 +196,21 @@ pub fn render_external(tname: &SmolStr) -> String {
     .to_pretty_string(MAX_COLUMNS)
 }
 
-pub fn render_custom_type(tname: &SmolStr, constructors: &Vec<crate::ast::RecordConstructor<std::sync::Arc<crate::type_::Type>>>) -> String {
+pub fn render_custom_type(
+    tname: &SmolStr,
+    parameters: &Vec<u64>,
+    constructors: &Vec<crate::ast::RecordConstructor<std::sync::Arc<crate::type_::Type>>>,
+) -> String {
     let cons = constructors
         .iter()
         .map(|constructor| {
             let fields = constructor
                 .arguments
                 .iter()
+                .map(|rc| {
+                    println!("#{:?} {:#?}", tname, rc);
+                    rc
+                })
                 .map(
                     |RecordConstructorArg {
                          label,
@@ -195,7 +223,7 @@ pub fn render_custom_type(tname: &SmolStr, constructors: &Vec<crate::ast::Record
                 .collect::<Vec<_>>();
             return (constructor.name.as_str(), fields);
         })
-        .map(|(name, fields)| record_definition_2(name, &fields).to_string());
+        .map(|(name, fields)| record_definition_2(name, parameters, &fields).to_string());
     docvec!(
         "<<\"",
         tname.to_string(),
@@ -214,10 +242,11 @@ pub fn render_custom_type(tname: &SmolStr, constructors: &Vec<crate::ast::Record
 
 pub fn record_definition_2(
     g_name: &str,
+    parameters: &Vec<u64>,
     fields: &[(&Option<SmolStr>, Arc<Type>)],
 ) -> String {
     let name = &g_name.to_snake_case();
-    let type_printer = TypePrinterStruct::new("").var_as_any();
+    let type_printer = TypePrinterStruct::new("", parameters).var_as_any();
 
     let fields = fields.iter().map(move |(name, type_)| {
         let type_ = type_printer.print(type_);
@@ -2143,17 +2172,17 @@ impl<'a> TypePrinter<'a> {
 
 #[derive(Debug)]
 struct TypePrinterStruct<'a> {
-    var_as_any: bool,
     current_module: &'a str,
     var_usages: Option<&'a HashMap<u64, u64>>,
+    parameters: &'a Vec<u64>,
 }
 
 impl<'a> TypePrinterStruct<'a> {
-    fn new(current_module: &'a str) -> Self {
+    fn new(current_module: &'a str, parameters: &'a Vec<u64>) -> Self {
         Self {
             current_module,
             var_usages: None,
-            var_as_any: false,
+            parameters,
         }
     }
 
@@ -2177,14 +2206,25 @@ impl<'a> TypePrinterStruct<'a> {
 
     fn print_var(&self, type_: &TypeVar) -> Document<'static> {
         match type_ {
-            TypeVar::Generic { .. } | TypeVar::Unbound { .. } if self.var_as_any => "any".to_doc(),
             TypeVar::Generic { id, .. } | TypeVar::Unbound { id, .. } => match &self.var_usages {
                 Some(usages) => match usages.get(id) {
                     Some(&0) => nil(),
                     Some(&1) => "any".to_doc(),
-                    _ => id_to_type_var(*id),
+                    _ => {
+                        let index = self.parameters.iter().position(|&r| r.eq(id)).unwrap();
+                        "{var_type, "
+                            .to_doc()
+                            .append(Document::String(index.to_string()))
+                            .append("}".to_doc())
+                    }
                 },
-                None => id_to_type_var(*id),
+                None => {
+                    let index = self.parameters.iter().position(|&r| r.eq(id)).unwrap();
+                    "{var_type, "
+                        .to_doc()
+                        .append(Document::String(index.to_string()))
+                        .append("}".to_doc())
+                }
             },
             TypeVar::Link { type_: typ } => self.print(typ),
         }
@@ -2216,28 +2256,21 @@ impl<'a> TypePrinterStruct<'a> {
     }
 
     fn print_type_app(&self, module: &str, name: &str, args: &[Arc<Type>]) -> Document<'static> {
-        let _args = concat(Itertools::intersperse(
+        println!("args {:#?}", args);
+        let args = concat(Itertools::intersperse(
             args.iter().map(|a| self.print(a)),
             ", ".to_doc(),
         ));
         let name = Document::String(name.to_string());
-        if self.current_module == module {
-            docvec![
-                "{ custom, ",
-                module_name_atom(module),
-                ", <<\"",
-                name,
-                "\">>}"
-            ]
-        } else {
-            docvec![
-                "{ custom, ",
-                module_name_atom(module),
-                ", <<\"",
-                name,
-                "\">>}"
-            ]
-        }
+        docvec![
+            "{ custom, ",
+            module_name_atom(module),
+            ", <<\"",
+            name,
+            "\">>, [",
+            args,
+            "]}"
+        ]
     }
 
     fn print_fn(&self, args: &[Arc<Type>], retrn: &Type) -> Document<'static> {
@@ -2255,9 +2288,8 @@ impl<'a> TypePrinterStruct<'a> {
         //     .append("\"}")
     }
 
-    /// Print type vars as `any()`.
-    fn var_as_any(mut self) -> Self {
-        self.var_as_any = true;
+    fn var_as_any(self) -> Self {
+        //   self.var_as_any = true;
         self
     }
 }
