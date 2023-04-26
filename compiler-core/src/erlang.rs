@@ -94,6 +94,7 @@ pub fn records(module: &TypedModule) -> Vec<(&str, String)> {
                 constructors,
                 ..
             }) => Some(constructors),
+
             _ => None,
         })
         .flatten()
@@ -148,59 +149,88 @@ pub fn records_2(module: &TypedModule) -> Vec<String> {
         .statements
         .iter()
         .filter_map(|s| match s {
-            ModuleStatement::CustomType(ct) => Some(ct),
+            ModuleStatement::ExternalType(ExternalType {
+                name,
+                //arguments: args,
+                ..
+            }) => Some(render_external(name)),
+            ModuleStatement::CustomType(CustomType {
+                name,
+                constructors,
+                ..
+            }) => Some(render_custom_type(name, constructors)),
             _ => None,
         })
-        .map(
-            |CustomType {
-                 name: tname,
-                 constructors,
-                 ..
-             }| {
-                let cons = constructors
-                    .iter()
-                    .filter_map(|constructor| {
-                        constructor
-                            .arguments
-                            .iter()
-                            .map(
-                                |RecordConstructorArg {
-                                     label,
-                                     ast: _,
-                                     location: _,
-                                     type_,
-                                     ..
-                                 }| {
-                                    label.as_deref().map(|label| (label, type_.clone()))
-                                },
-                            )
-                            .collect::<Option<Vec<_>>>()
-                            .map(|fields| (constructor.name.as_str(), fields))
-                    })
-                    .map(|(name, fields)| record_definition_2(name, &fields).to_string());
-                docvec!(
-                    "<<\"",
-                    tname.to_string(),
-                    "\">> => [",
-                    concat(Itertools::intersperse(
-                        cons.map(|c| Document::String(c)),
-                        break_(",", ", ")
-                    )),
-                    "]",
-                    line()
-                )
-                .to_pretty_string(MAX_COLUMNS)
-            },
-        )
         .collect()
 }
+pub fn render_external(tname: &SmolStr) -> String {
+    docvec!(
+        "<<\"",
+        tname.to_string(),
+        "\">> => {external_type, <<\"",
+        tname.to_string(),
+        "\">>",
+        "}",
+        line()
+    )
+    .to_pretty_string(MAX_COLUMNS)
+}
 
-pub fn record_definition_2(g_name: &str, fields: &[(&str, Arc<Type>)]) -> String {
+pub fn render_custom_type(tname: &SmolStr, constructors: &Vec<crate::ast::RecordConstructor<std::sync::Arc<crate::type_::Type>>>) -> String {
+    let cons = constructors
+        .iter()
+        .map(|constructor| {
+            let fields = constructor
+                .arguments
+                .iter()
+                .map(
+                    |RecordConstructorArg {
+                         label,
+                         ast: _,
+                         location: _,
+                         type_,
+                         ..
+                     }| { (label, type_.clone()) },
+                )
+                .collect::<Vec<_>>();
+            return (constructor.name.as_str(), fields);
+        })
+        .map(|(name, fields)| record_definition_2(name, &fields).to_string());
+    docvec!(
+        "<<\"",
+        tname.to_string(),
+        "\">> => {type_info, \"",
+        tname.to_string(),
+        "\", [",
+        concat(Itertools::intersperse(
+            cons.map(|c| Document::String(c)),
+            break_(",", ", ")
+        )),
+        "]}",
+        line()
+    )
+    .to_pretty_string(MAX_COLUMNS)
+}
+
+pub fn record_definition_2(
+    g_name: &str,
+    fields: &[(&Option<SmolStr>, Arc<Type>)],
+) -> String {
     let name = &g_name.to_snake_case();
     let type_printer = TypePrinterStruct::new("").var_as_any();
+
     let fields = fields.iter().map(move |(name, type_)| {
         let type_ = type_printer.print(type_);
-        docvec!("{", atom((*name).to_string()), ", ", type_.group(), "}")
+
+        let nname = match name {
+            Some(name) => "{some, "
+                .to_doc()
+                .append(atom((*name).to_string()))
+                .append("}"),
+            None => "none".to_doc(),
+        };
+
+        docvec!("{ field, ", nname, ", ", type_.group(), "}")
     });
 
     let fields = break_("", "")
@@ -210,7 +240,7 @@ pub fn record_definition_2(g_name: &str, fields: &[(&str, Arc<Type>)]) -> String
         .group();
 
     docvec!(
-        "{",
+        "{constructor, ",
         atom(name.to_string()),
         ", <<\"",
         g_name.to_string(),
@@ -308,7 +338,14 @@ fn module_document<'a>(
         records_2(module).into_iter().map(|x| Document::String(x)),
         ",".to_doc(),
     ));
-    let module_info = docvec!(lines(2), "gleam_info() -> ", line(), "  #{", types, "  }.",);
+    let module_info = docvec!(
+        lines(2),
+        "gleam_info() -> ",
+        line(),
+        " {gleam_info, 0, #{",
+        types,
+        "  }}.",
+    );
 
     Ok(header
         .append("-compile([no_auto_import, nowarn_unused_vars]).")
@@ -2156,9 +2193,9 @@ impl<'a> TypePrinterStruct<'a> {
     fn print_prelude_type(&self, name: &str, args: &[Arc<Type>]) -> Document<'static> {
         match name {
             "Nil" => "nil".to_doc(),
-            "Int" | "UtfCodepoint" => "integer".to_doc(),
-            "String" => "binary".to_doc(),
-            "Bool" => "boolean".to_doc(),
+            "Int" | "UtfCodepoint" => "int".to_doc(),
+            "String" => "string".to_doc(),
+            "Bool" => "bool".to_doc(),
             "Float" => "float".to_doc(),
             "BitString" => "bitstring".to_doc(),
             "List" => {
@@ -2183,11 +2220,23 @@ impl<'a> TypePrinterStruct<'a> {
             args.iter().map(|a| self.print(a)),
             ", ".to_doc(),
         ));
-        let name = Document::String(erl_safe_type_name(name.to_snake_case()));
+        let name = Document::String(name.to_string());
         if self.current_module == module {
-            docvec!["{ custom, ", module_name_atom(module), ",", name, "}"]
+            docvec![
+                "{ custom, ",
+                module_name_atom(module),
+                ", <<\"",
+                name,
+                "\">>}"
+            ]
         } else {
-            docvec!["{ custom, ", module_name_atom(module), ",", name, "}"]
+            docvec![
+                "{ custom, ",
+                module_name_atom(module),
+                ", <<\"",
+                name,
+                "\">>}"
+            ]
         }
     }
 
@@ -2197,12 +2246,13 @@ impl<'a> TypePrinterStruct<'a> {
             ", ".to_doc(),
         ));
         let retrn = self.print(retrn);
-        "{function, \"("
-            .to_doc()
-            .append(args)
-            .append(") -> ")
-            .append(retrn)
-            .append("\"}")
+        "{function}".to_doc()
+        // \"("
+        //     .to_doc()
+        //     .append(args)
+        //     .append(") -> ")
+        //     .append(retrn)
+        //     .append("\"}")
     }
 
     /// Print type vars as `any()`.
