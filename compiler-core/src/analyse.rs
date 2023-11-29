@@ -361,6 +361,9 @@ fn register_values_from_custom_type(
         };
         environment.insert_accessors(name.clone(), map)
     }
+    
+    let names: &mut HashMap<EcoString, SrcSpan> = &mut HashMap::<EcoString, SrcSpan>::new();
+ 
     for constructor in constructors {
         assert_unique_name(names, &constructor.name, constructor.location)?;
 
