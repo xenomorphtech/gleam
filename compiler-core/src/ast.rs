@@ -23,12 +23,12 @@ use ecow::EcoString;
 use pretty_assertions::assert_eq;
 use vec1::Vec1;
 
-pub const TRY_VARIABLE: &str = "_try";
-pub const PIPE_VARIABLE: &str = "_pipe";
-pub const USE_ASSIGNMENT_VARIABLE: &str = "_use";
-pub const ASSERT_FAIL_VARIABLE: &str = "_assert_fail";
-pub const ASSERT_SUBJECT_VARIABLE: &str = "_assert_subject";
-pub const CAPTURE_VARIABLE: &str = "_capture";
+pub const TRY_VARIABLE: &str = "g__try";
+pub const PIPE_VARIABLE: &str = "g__pipe";
+pub const USE_ASSIGNMENT_VARIABLE: &str = "g__use";
+pub const ASSERT_FAIL_VARIABLE: &str = "g__assert_fail";
+pub const ASSERT_SUBJECT_VARIABLE: &str = "g__assert_subject";
+pub const CAPTURE_VARIABLE: &str = "g__capture";
 
 pub trait HasLocation {
     fn location(&self) -> SrcSpan;
@@ -145,7 +145,7 @@ fn module_dependencies_test() {
         vec![
             ("one".into(), SrcSpan::new(0, 10)),
             ("two".into(), SrcSpan::new(45, 55)),
-            //("three".into(), SrcSpan::new(95, 107)),
+            ("three".into(), SrcSpan::new(95, 107)),
             ("four".into(), SrcSpan::new(118, 129)),
         ],
         module.dependencies(Target::Erlang)
@@ -396,6 +396,7 @@ pub struct Function<T, Expr> {
     pub return_type: T,
     pub documentation: Option<EcoString>,
     pub external_erlang: Option<(EcoString, EcoString)>,
+    pub external_elixir: Option<(EcoString, EcoString)>,
     pub external_javascript: Option<(EcoString, EcoString)>,
     pub targets: BuildTargets,
 }
@@ -833,6 +834,10 @@ impl CallArg<TypedExpr> {
 impl CallArg<TypedPattern> {
     pub fn find_node(&self, byte_index: u32) -> Option<Located<'_>> {
         self.value.find_node(byte_index)
+    }
+
+    pub fn is_discard(&self) -> bool {
+        matches!(self.value, TypedPattern::Discard { .. })
     }
 }
 

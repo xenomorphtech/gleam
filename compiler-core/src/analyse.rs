@@ -110,11 +110,23 @@ pub fn infer_module<A>(
     let mut env = imports::Importer::run(origin, env, &statements.imports)?;
 
     for function in &statements.functions {
-        let is_external =
-            function.external_erlang.is_none() && function.external_javascript.is_none();
+        let is_external = function.external_erlang.is_none()
+            && function.external_javascript.is_none()
+            && function.external_elixir.is_none();
 
         ensure_body_given(is_external, &function.body, function.location)?;
     }
+
+    let mut untargeted_count = HashMap::new();
+    statements.functions.retain(|function| {
+        if function.targets.implements(&env.target) {
+            true
+        } else {
+            untargeted_count
+                .insert(function.name.clone(), true)
+                .is_none()
+        }
+    });
 
     statements.placeholder_functions(&env);
 
@@ -192,6 +204,41 @@ pub fn infer_module<A>(
                     working_group.push(statement);
                 }
             }
+        }
+
+        let mut err = None;
+
+        working_group = working_group
+            .into_iter()
+            .map(|def| {
+                if let Definition::Function(function) = def {
+                    if !function.targets.implements(&env.target) {
+                        if function.public & is_root {
+                            err = Some(Err(crate::type_::Error::UnimplementedPublicFunction {
+                                location: function.location,
+                                module: name.clone(),
+                                function: function.name.clone(),
+                            }));
+                        }
+                        let body = vec1::vec1![crate::ast::TypedStatement::Expression(
+                            crate::ast::TypedExpr::Todo {
+                                type_: env.new_generic_var(),
+                                location: function.location,
+                                message: None,
+                            }
+                        )];
+                        Definition::Function(Function { body, ..function })
+                    } else {
+                        Definition::Function(function)
+                    }
+                } else {
+                    def
+                }
+            })
+            .collect();
+
+        if let Some(err) = err {
+            return err;
         }
 
         let mut err = None;
@@ -534,6 +581,7 @@ fn register_value_from_function(
         public,
         documentation,
         external_erlang,
+        external_elixir,
         external_javascript,
         deprecation,
         end_position: _,
@@ -553,7 +601,9 @@ fn register_value_from_function(
 
     // When external implementations are present then the type annotations
     // must be given in full, so we disallow holes in the annotations.
-    hydrator.permit_holes(external_erlang.is_none() && external_javascript.is_none());
+    hydrator.permit_holes(
+        external_erlang.is_none() && external_javascript.is_none() && external_elixir.is_none(),
+    );
 
     let arg_types = args
         .iter()
@@ -563,8 +613,12 @@ fn register_value_from_function(
     let typ = fn_(arg_types, return_type);
     let _ = hydrators.insert(name.clone(), hydrator);
 
-    let external =
-        target_function_implementation(environment.target, external_erlang, external_javascript);
+    let external = target_function_implementation(
+        environment.target,
+        external_erlang,
+        external_elixir,
+        external_javascript,
+    );
     let (impl_module, impl_function) = implementation_names(external, module_name, name);
     let variant = ValueConstructorVariant::ModuleFn {
         documentation: documentation.clone(),
@@ -636,6 +690,7 @@ fn infer_function(
         end_position: end_location,
         deprecation,
         external_erlang,
+        external_elixir,
         external_javascript,
         return_type: (),
         mut targets,
@@ -650,8 +705,12 @@ fn infer_function(
         .expect("Preregistered type for fn was not a fn");
 
     // Find the external implementation for the current target, if one has been given.
-    let external =
-        target_function_implementation(environment.target, &external_erlang, &external_javascript);
+    let external = target_function_implementation(
+        environment.target,
+        &external_erlang,
+        &external_elixir,
+        &external_javascript,
+    );
     let (impl_module, impl_function) = implementation_names(external, module_name, &name);
 
     if external.is_some() {
@@ -716,6 +775,7 @@ fn infer_function(
             .expect("Could not find return type for fn"),
         body,
         external_erlang,
+        external_elixir,
         external_javascript,
         targets,
     }))
@@ -739,10 +799,12 @@ fn implementation_names(
 fn target_function_implementation<'a>(
     target: Target,
     external_erlang: &'a Option<(EcoString, EcoString)>,
+    external_elixir: &'a Option<(EcoString, EcoString)>,
     external_javascript: &'a Option<(EcoString, EcoString)>,
 ) -> &'a Option<(EcoString, EcoString)> {
     match target {
         Target::Erlang => external_erlang,
+        Target::Elixir => external_elixir,
         Target::JavaScript => external_javascript,
     }
 }
@@ -1137,6 +1199,7 @@ fn generalise_function(
         end_position: end_location,
         return_type,
         external_erlang,
+        external_elixir,
         external_javascript,
         targets,
     } = function;
@@ -1151,8 +1214,12 @@ fn generalise_function(
     let type_ = type_::generalise(typ);
 
     // Insert the function into the module's interface
-    let external =
-        target_function_implementation(environment.target, &external_erlang, &external_javascript);
+    let external = target_function_implementation(
+        environment.target,
+        &external_erlang,
+        &external_elixir,
+        &external_javascript,
+    );
     let (impl_module, impl_function) = implementation_names(external, module_name, &name);
 
     let variant = ValueConstructorVariant::ModuleFn {
@@ -1193,6 +1260,7 @@ fn generalise_function(
         return_type,
         body,
         external_erlang,
+        external_elixir,
         external_javascript,
         targets,
     })

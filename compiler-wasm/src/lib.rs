@@ -179,6 +179,7 @@ fn do_compile_package(project: Project, target: Target) -> Result<(), Error> {
 
     let target = match target {
         Target::Erlang => TargetCodegenConfiguration::Erlang { app_file: None },
+        Target::Elixir => todo!(),
         Target::JavaScript => TargetCodegenConfiguration::JavaScript {
             emit_typescript_definitions: false,
             prelude_location: Utf8PathBuf::from("./gleam_prelude.mjs"),

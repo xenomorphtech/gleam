@@ -1,3 +1,4 @@
+use crate::build::ElixirAppCodegenConfiguration;
 use crate::{
     build::{
         package_compiler, package_compiler::PackageCompiler, package_loader::StaleTracker,
@@ -313,7 +314,7 @@ where
         }
 
         // TODO: test
-        if target != Target::Erlang {
+        if target != Target::Erlang && target != Target::Elixir {
             tracing::debug!(%package_name, "skipping_rebar3_build_for_non_erlang_target");
             return Ok(());
         }
@@ -528,6 +529,23 @@ where
                     .collect();
                 super::TargetCodegenConfiguration::Erlang {
                     app_file: Some(ErlangAppCodegenConfiguration {
+                        include_dev_deps: is_root,
+                        package_name_overrides,
+                    }),
+                }
+            }
+
+            Target::Elixir => {
+                let package_name_overrides = self
+                    .packages
+                    .values()
+                    .flat_map(|p| {
+                        let overriden = p.otp_app.as_ref()?;
+                        Some((p.name.clone(), overriden.clone()))
+                    })
+                    .collect();
+                super::TargetCodegenConfiguration::Elixir {
+                    app_file: Some(ElixirAppCodegenConfiguration {
                         include_dev_deps: is_root,
                         package_name_overrides,
                     }),

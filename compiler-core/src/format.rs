@@ -144,6 +144,7 @@ impl<'comments> Formatter<'comments> {
             None => document,
             Some(Target::Erlang) => docvec!["@target(erlang)", line(), document],
             Some(Target::JavaScript) => docvec!["@target(javascript)", line(), document],
+            Some(Target::Elixir) => docvec!["@target(elixir)", line(), document],
         };
         commented(document, comments)
     }
@@ -507,6 +508,10 @@ impl<'comments> Formatter<'comments> {
         // @external attribute
         let external = |t: &'static str, m: &'a str, f: &'a str| {
             docvec!["@external(", t, ", \"", m, "\", \"", f, "\")", line()]
+        };
+        let attributes = match function.external_elixir.as_ref() {
+            Some((m, f)) => attributes.append(external("elixir", m, f)),
+            None => attributes,
         };
         let attributes = match function.external_erlang.as_ref() {
             Some((m, f)) => attributes.append(external("erlang", m, f)),

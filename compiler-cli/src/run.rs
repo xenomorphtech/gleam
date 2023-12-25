@@ -88,6 +88,13 @@ pub fn command(
             }),
             _ => run_erlang(&paths, &root_config.name, &module, arguments),
         },
+        Target::Elixir => match runtime {
+            Some(r) => Err(Error::InvalidRuntime {
+                target: Target::Erlang,
+                invalid_runtime: r,
+            }),
+            _ => run_elixir(&paths, &root_config.name, &module, arguments),
+        },
         Target::JavaScript => match runtime.unwrap_or(mod_config.javascript.runtime) {
             Runtime::Deno => run_javascript_deno(
                 &paths,
@@ -103,6 +110,44 @@ pub fn command(
     }?;
 
     std::process::exit(status);
+}
+
+fn run_elixir(
+    paths: &ProjectPaths,
+    package: &str,
+    module: &str,
+    arguments: Vec<String>,
+) -> Result<i32, Error> {
+    let mut args = vec![];
+
+    // Specify locations of Erlang applications
+    let packages = paths.build_directory_for_target(Mode::Dev, Target::Elixir);
+
+    println!("packages {:?}", packages);
+
+    for entry in crate::fs::read_dir(packages)?.filter_map(Result::ok) {
+        args.push("-pa".into());
+        args.push(entry.path().join("ebin").into());
+    }
+
+    // gleam modules are seperated by `/`. Erlang modules are separated by `@`.
+    let module = module.replace('/', ".");
+
+    args.push("-eval".into());
+    args.push(format!("{package}@@main:run({module})"));
+
+    // Don't run the Erlang shell
+    args.push("-noshell".into());
+
+    // Tell the BEAM that any following argument are for the program
+    args.push("-extra".into());
+    for argument in arguments.into_iter() {
+        args.push(argument);
+    }
+
+    println!("erl {:?}", args);
+
+    ProjectIO::new().exec("erl", &args, &[], None, Stdio::Inherit)
 }
 
 fn run_erlang(

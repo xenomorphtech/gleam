@@ -92,6 +92,7 @@ struct Attributes {
     target: Option<Target>,
     deprecated: Deprecation,
     external_erlang: Option<(EcoString, EcoString)>,
+    external_elixir: Option<(EcoString, EcoString)>,
     external_javascript: Option<(EcoString, EcoString)>,
 }
 
@@ -115,7 +116,6 @@ pub fn parse_module(src: &str) -> Result<Parsed, ParseError> {
 //
 // Test Interface
 //
-#[cfg(test)]
 pub fn parse_statement_sequence(src: &str) -> Result<Vec1<UntypedStatement>, ParseError> {
     let lex = lexer::make_tokenizer(src);
     let mut parser = Parser::new(lex);
@@ -1543,6 +1543,7 @@ where
             targets.or_mut(BuildTargets {
                 erlang: attributes.external_erlang.is_some(),
                 javascript: attributes.external_javascript.is_some(),
+                elixir: attributes.external_elixir.is_some(),
             })
         };
 
@@ -1558,6 +1559,7 @@ where
             return_annotation,
             deprecation: std::mem::take(&mut attributes.deprecated),
             external_erlang: attributes.external_erlang.take(),
+            external_elixir: attributes.external_elixir.take(),
             external_javascript: attributes.external_javascript.take(),
             targets,
         })))
@@ -2889,6 +2891,20 @@ where
                     return parse_error(ParseErrorType::DuplicateAttribute, SrcSpan { start, end });
                 }
                 attributes.external_erlang = Some((module, function));
+                Ok(())
+            }
+
+            "elixir" => {
+                let _ = self.expect_one(&Token::Comma)?;
+                let (_, module, _) = self.expect_string()?;
+                let _ = self.expect_one(&Token::Comma)?;
+                let (_, function, _) = self.expect_string()?;
+                let _ = self.maybe_one(&Token::Comma);
+                let (_, end) = self.expect_one(&Token::RightParen)?;
+                if attributes.external_elixir.is_some() {
+                    return parse_error(ParseErrorType::DuplicateAttribute, SrcSpan { start, end });
+                }
+                attributes.external_elixir = Some((module, function));
                 Ok(())
             }
 

@@ -55,6 +55,9 @@ pub enum Target {
     #[strum(serialize = "erlang", serialize = "erl")]
     #[serde(rename = "erlang", alias = "erl")]
     Erlang,
+    #[strum(serialize = "elixir", serialize = "elixir")]
+    #[serde(rename = "elixir", alias = "ex")]
+    Elixir,
     #[strum(serialize = "javascript", serialize = "js")]
     #[serde(rename = "javascript", alias = "js")]
     JavaScript,
@@ -79,6 +82,7 @@ impl Target {
 pub struct BuildTargets {
     pub erlang: bool,
     pub javascript: bool,
+    pub elixir: bool,
 }
 
 impl BuildTargets {
@@ -86,6 +90,7 @@ impl BuildTargets {
         BuildTargets {
             erlang: true,
             javascript: true,
+            elixir: true,
         }
     }
 
@@ -97,6 +102,9 @@ impl BuildTargets {
         if self.javascript {
             n.push(2)
         }
+        if self.elixir {
+            n.push(3)
+        }
         n
     }
 
@@ -104,6 +112,7 @@ impl BuildTargets {
         let n = Self {
             erlang: vals.contains(&1),
             javascript: vals.contains(&2),
+            elixir: vals.contains(&3),
         };
         n
     }
@@ -112,22 +121,26 @@ impl BuildTargets {
         BuildTargets {
             erlang: self.erlang & other.erlang,
             javascript: self.javascript & other.javascript,
+            elixir: self.elixir & other.elixir,
         }
     }
     pub fn and_mut(&mut self, other: Self) {
         self.erlang = self.erlang & other.erlang;
         self.javascript = self.javascript & other.javascript;
+        self.elixir = self.elixir & other.elixir;
     }
 
     pub fn or_mut(&mut self, other: Self) {
         self.erlang = self.erlang | other.erlang;
         self.javascript = self.javascript | other.javascript;
+        self.elixir = self.elixir | other.elixir;
     }
 
     pub fn add_target(&mut self, target: Target) {
         match target {
             Target::Erlang => self.erlang = true,
             Target::JavaScript => self.javascript = true,
+            Target::Elixir => self.elixir = true,
         }
     }
 
@@ -135,6 +148,7 @@ impl BuildTargets {
         match target {
             Target::Erlang => self.erlang,
             Target::JavaScript => self.javascript,
+            Target::Elixir => self.elixir,
         }
     }
 }
@@ -183,6 +197,9 @@ pub enum TargetCodegenConfiguration {
     Erlang {
         app_file: Option<ErlangAppCodegenConfiguration>,
     },
+    Elixir {
+        app_file: Option<ElixirAppCodegenConfiguration>,
+    },
 }
 
 impl TargetCodegenConfiguration {
@@ -190,8 +207,18 @@ impl TargetCodegenConfiguration {
         match self {
             Self::JavaScript { .. } => Target::JavaScript,
             Self::Erlang { .. } => Target::Erlang,
+            Self::Elixir { .. } => Target::Elixir,
         }
     }
+}
+
+#[derive(Debug)]
+pub struct ElixirAppCodegenConfiguration {
+    pub include_dev_deps: bool,
+    /// Some packages have a different OTP application name than their package
+    /// name, as rebar3 (and Mix?) support this. The .app file must use the OTP
+    /// name, not the package name.
+    pub package_name_overrides: HashMap<EcoString, EcoString>,
 }
 
 #[derive(Debug)]
@@ -277,6 +304,12 @@ impl Module {
     pub fn compiled_erlang_path(&self) -> Utf8PathBuf {
         let mut path = self.name.replace("/", "@");
         path.push_str(".erl");
+        Utf8PathBuf::from(path.as_ref())
+    }
+
+    pub fn compiled_elixir_path(&self) -> Utf8PathBuf {
+        let mut path = self.name.replace("/", ".");
+        path.push_str(".ex");
         Utf8PathBuf::from(path.as_ref())
     }
 

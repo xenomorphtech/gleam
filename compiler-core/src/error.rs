@@ -166,6 +166,9 @@ pub enum Error {
     #[error("warnings are not permitted")]
     ForbiddenWarnings { count: usize },
 
+    #[error("elixir codegen failed")]
+    Elixir { path: Utf8PathBuf, src: EcoString },
+
     #[error("javascript codegen failed")]
     JavaScript {
         path: Utf8PathBuf,
@@ -2416,6 +2419,14 @@ Fix the warnings and try again."
                 }
             }
 
+            Error::Elixir { .. } => Diagnostic {
+                title: "Unsupported feature for compilation target".into(),
+                text: "is not supported for Elixir compilation".to_string(),
+                hint: None,
+                level: Level::Error,
+                location: None,
+            },
+
             Error::JavaScript { src, path, error } => match error {
                 javascript::Error::Unsupported { feature, location } => Diagnostic {
                     title: "Unsupported feature for compilation target".into(),
@@ -2690,6 +2701,10 @@ but you are using v{}.",
                     }
                     Target::Erlang => Some(
                         "You can not set a runtime for Erlang. Did you mean to target JavaScript?"
+                            .into(),
+                    ),
+                    Target::Elixir => Some(
+                        "You can not set a runtime for Elixir. Did you mean to target JavaScript?"
                             .into(),
                     ),
                 };

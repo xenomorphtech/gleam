@@ -1,7 +1,7 @@
 use crate::{
     build::{ErlangAppCodegenConfiguration, Module},
     config::PackageConfig,
-    erlang,
+    elixir, erlang,
     io::FileSystemWriter,
     javascript,
     line_numbers::LineNumbers,
@@ -11,6 +11,48 @@ use itertools::Itertools;
 use std::fmt::Debug;
 
 use camino::Utf8Path;
+
+#[derive(Debug)]
+pub struct Elixir<'a> {
+    build_directory: &'a Utf8Path,
+    _include_directory: &'a Utf8Path,
+}
+
+impl<'a> Elixir<'a> {
+    pub fn new(build_directory: &'a Utf8Path, include_directory: &'a Utf8Path) -> Self {
+        Self {
+            build_directory,
+            _include_directory: include_directory,
+        }
+    }
+
+    pub fn render<Writer: FileSystemWriter>(
+        &self,
+        writer: Writer,
+        modules: &[Module],
+    ) -> Result<()> {
+        for module in modules {
+            let erl_name = module.name.replace("/", ".");
+            self.elixir_module(&writer, module, &erl_name)?;
+        }
+        Ok(())
+    }
+
+    fn elixir_module<Writer: FileSystemWriter>(
+        &self,
+        writer: &Writer,
+        module: &Module,
+        erl_name: &str,
+    ) -> Result<()> {
+        let name = format!("{erl_name}.ex");
+        let path = self.build_directory.join(&name);
+        let line_numbers = LineNumbers::new(&module.code);
+        let output = elixir::module(&module.ast, &line_numbers, &module.input_path, &module.code);
+
+        tracing::debug!(name = ?name, "Generated Elixir module");
+        writer.write(&path, &output?)
+    }
+}
 
 /// A code generator that creates a .erl Erlang module and record header files
 /// for each Gleam module in the package.
@@ -101,12 +143,12 @@ impl<'a> ErlangApp<'a> {
             .erlang
             .application_start_module
             .as_ref()
-            .map(|module| tuple("mod", &format!("'{}'", module.replace("/", "@"))))
+            .map(|module| tuple("mod", &format!("'{}'", module.replace("/", "."))))
             .unwrap_or_default();
 
         let modules = modules
             .iter()
-            .map(|m| m.name.replace("/", "@"))
+            .map(|m| format!("'{}'", m.name.replace("/", ".")))
             .sorted()
             .join(",\n               ");
 

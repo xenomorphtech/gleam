@@ -78,12 +78,17 @@ worker_loop(Parent, Out) ->
     end.
 
 compile_elixir(Modules, Out) ->
+    P = os:cmd("elixir -e \"IO.puts Path.expand(Path.join(Application.app_dir(:elixir), '..'))\""),
     Error = [
         "The program elixir was not found. Is it installed?",
         $\n,
         "Documentation for installing Elixir can be viewed here:",
         $\n,
-        "https://elixir-lang.org/install.html"
+        "https://elixir-lang.org/install.html",
+        $\n,
+        "try setting your ERL_LIBS to",
+        $\n,
+        P
     ],
     case Modules of
         [] -> {true, []};

@@ -7,6 +7,7 @@
 #[cfg(test)]
 mod generated_tests;
 
+use gleam_core::build::ElixirAppCodegenConfiguration;
 use gleam_core::{
     build::{
         ErlangAppCodegenConfiguration, Mode, NullTelemetry, StaleTracker, Target,
@@ -31,6 +32,12 @@ pub fn prepare(path: &str) -> String {
     let target = match config.target {
         Target::Erlang => TargetCodegenConfiguration::Erlang {
             app_file: Some(ErlangAppCodegenConfiguration {
+                include_dev_deps: true,
+                package_name_overrides: HashMap::new(),
+            }),
+        },
+        Target::Elixir => TargetCodegenConfiguration::Elixir {
+            app_file: Some(ElixirAppCodegenConfiguration {
                 include_dev_deps: true,
                 package_name_overrides: HashMap::new(),
             }),

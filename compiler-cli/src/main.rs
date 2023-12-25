@@ -53,6 +53,7 @@ extern crate pretty_assertions;
 mod add;
 mod build;
 mod build_lock;
+mod caas;
 mod cli;
 mod compile_package;
 mod config;
@@ -200,6 +201,9 @@ enum Command {
     /// Read and print gleam.toml for debugging
     #[clap(hide = true)]
     PrintConfig,
+
+    #[clap()]
+    Caas,
 
     /// Add new project dependencies
     Add {
@@ -390,6 +394,8 @@ fn main() {
             target,
             warnings_as_errors,
         } => command_build(target, warnings_as_errors),
+
+        Command::Caas {} => caas::execute(),
 
         Command::Check { target } => command_check(target),
 

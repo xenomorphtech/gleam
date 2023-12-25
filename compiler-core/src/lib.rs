@@ -65,6 +65,7 @@ pub mod config;
 pub mod dependency;
 pub mod diagnostic;
 pub mod docs;
+pub mod elixir;
 pub mod erlang;
 pub mod error;
 pub mod fix;

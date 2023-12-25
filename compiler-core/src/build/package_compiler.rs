@@ -1,3 +1,4 @@
+use crate::build::ElixirAppCodegenConfiguration;
 use crate::type_::PRELUDE_MODULE_NAME;
 use crate::{
     ast::{SrcSpan, TypedModule, UntypedModule},
@@ -8,7 +9,7 @@ use crate::{
         package_loader::{CodegenRequired, PackageLoader, StaleTracker},
         Mode, Module, Origin, Package, Target,
     },
-    codegen::{Erlang, ErlangApp, JavaScript, TypeScriptDeclarations},
+    codegen::{Elixir, Erlang, ErlangApp, JavaScript, TypeScriptDeclarations},
     config::PackageConfig,
     dep_tree, error,
     io::{CommandExecutor, FileSystemReader, FileSystemWriter, Stdio},
@@ -160,6 +161,15 @@ where
             return Ok(());
         }
 
+        println!("module list {:?}", &modules);
+        //let erl_modules: Vec<&Utf8PathBuf> =
+        //    modules.iter().filter(|m| m.ends_with(".erl")).collect();
+        //let ex_modules: Vec<&Utf8PathBuf> = modules
+        //    .iter()
+        //    .filter(|m| return m.as_str().ends_with("ex"))
+        //    .collect();
+        //println!("{:?}", &ex_modules);
+
         tracing::debug!("compiling_erlang");
 
         let escript_path = self
@@ -180,24 +190,51 @@ where
             "--out".into(),
             self.out.join("ebin").to_string(),
         ];
-        // Add the list of modules to compile
+
         for module in modules {
+            println!("erl? {module}");
             let path = self.out.join(paths::ARTEFACT_DIRECTORY_NAME).join(module);
             args.push(path.to_string());
         }
+
+        // Add the list of modules to compile
         // Compile Erlang and Elixir modules
+        println!("escript {:?}", &args);
+
         let status = self
             .io
             .exec("escript", &args, &[], None, self.subprocess_stdio)?;
 
-        if status == 0 {
-            Ok(())
-        } else {
-            Err(Error::ShellCommand {
+        if status != 0 {
+            return Err(Error::ShellCommand {
                 program: "escript".into(),
                 err: None,
-            })
+            });
+        } else {
+            Ok(())
         }
+
+        //let mut args = vec!["-o".into(), self.out.join("ebin").to_string()];
+        //for module in ex_modules {
+        //    println!("ex? {module}");
+        //    let path = self.out.join(paths::ARTEFACT_DIRECTORY_NAME).join(module);
+        //    args.push(path.to_string());
+        //}
+
+        //println!("elixirc {:?}", args);
+
+        //let status = self
+        //    .io
+        //    .exec("elixirc", &args, &[], None, self.subprocess_stdio)?;
+
+        //if status == 0 {
+        //    Ok(())
+        //} else {
+        //    Err(Error::ShellCommand {
+        //        program: "elixirc".into(),
+        //        err: None,
+        //    })
+        //}
     }
 
     fn copy_project_native_files(
@@ -286,9 +323,62 @@ where
             TargetCodegenConfiguration::Erlang { app_file } => {
                 self.perform_erlang_codegen(modules, app_file.as_ref())
             }
+            TargetCodegenConfiguration::Elixir { app_file } => {
+                self.perform_elixir_codegen(modules, app_file.as_ref())
+            }
         }
     }
 
+    fn perform_elixir_codegen(
+        &mut self,
+        modules: &[Module],
+        app_file_config: Option<&ElixirAppCodegenConfiguration>,
+    ) -> Result<(), Error> {
+        let mut written = HashSet::new();
+        let build_dir = self.out.join(paths::ARTEFACT_DIRECTORY_NAME);
+        let include_dir = self.out.join("include");
+        let io = self.io.clone();
+
+        io.mkdir(&build_dir)?;
+
+        if self.copy_native_files {
+            self.copy_project_native_files(&build_dir, &mut written)?;
+        } else {
+            tracing::debug!("skipping_native_file_copying");
+        }
+
+        if let Some(config) = app_file_config {
+            let nconfig = ErlangAppCodegenConfiguration {
+                include_dev_deps: config.include_dev_deps,
+                package_name_overrides: config.package_name_overrides.clone(),
+            };
+            ErlangApp::new(&self.out.join("ebin"), &nconfig).render(
+                io.clone(),
+                &self.config,
+                modules,
+            )?;
+        }
+
+        if self.compile_beam_bytecode && self.write_entrypoint {
+            self.render_erlang_entrypoint_module(&build_dir, &mut written)?;
+        } else {
+            tracing::debug!("skipping_entrypoint_generation");
+        }
+
+        // NOTE: This must come after `copy_project_native_files` to ensure that
+        // we overwrite any precompiled Erlang that was included in the Hex
+        // package. Otherwise we will build the potentially outdated precompiled
+        // version and not the newly compiled version.
+        Elixir::new(&build_dir, &include_dir).render(io, modules)?;
+
+        if self.compile_beam_bytecode {
+            written.extend(modules.iter().map(Module::compiled_elixir_path));
+            self.compile_erlang_to_beam(&written)?;
+        } else {
+            tracing::debug!("skipping_erlang_bytecode_compilation");
+        }
+        Ok(())
+    }
     fn perform_erlang_codegen(
         &mut self,
         modules: &[Module],
