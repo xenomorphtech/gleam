@@ -213,28 +213,6 @@ where
         } else {
             Ok(())
         }
-
-        //let mut args = vec!["-o".into(), self.out.join("ebin").to_string()];
-        //for module in ex_modules {
-        //    println!("ex? {module}");
-        //    let path = self.out.join(paths::ARTEFACT_DIRECTORY_NAME).join(module);
-        //    args.push(path.to_string());
-        //}
-
-        //println!("elixirc {:?}", args);
-
-        //let status = self
-        //    .io
-        //    .exec("elixirc", &args, &[], None, self.subprocess_stdio)?;
-
-        //if status == 0 {
-        //    Ok(())
-        //} else {
-        //    Err(Error::ShellCommand {
-        //        program: "elixirc".into(),
-        //        err: None,
-        //    })
-        //}
     }
 
     fn copy_project_native_files(
