@@ -36,6 +36,7 @@ fn parse_and_order(
             end_position: src.len() as u32,
             return_type: (),
             documentation: None,
+            external_elixir: None,
             external_erlang: None,
             external_javascript: None,
             targets: BuildTargets::all(),

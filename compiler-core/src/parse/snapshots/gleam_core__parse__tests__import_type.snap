@@ -1,6 +1,6 @@
 ---
 source: compiler-core/src/parse/tests.rs
-assertion_line: 558
+assertion_line: 636
 expression: "import wibble.{type Wobble, Wobble, type Wabble}"
 ---
 Parsed {
@@ -51,6 +51,7 @@ Parsed {
                         targets: BuildTargets {
                             erlang: true,
                             javascript: true,
+                            elixir: true,
                         },
                     },
                 ),
