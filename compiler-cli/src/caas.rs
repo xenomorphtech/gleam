@@ -94,12 +94,17 @@ pub fn execute() -> Result<(), GleamError> {
     Ok(())
 }
 
+use std::io::Write;
+use std::process::Child;
+use std::process::{Command, Stdio};
+
 struct Repl {
     env: String,
     compiled_project: Built,
     direct_dependencies: collections::HashMap<ecow::EcoString, String>,
     modules: im::HashMap<ecow::EcoString, gleam_core::type_::ModuleInterface>,
     ids: UniqueIdGenerator,
+    child: Child,
 }
 
 impl Repl {
@@ -109,12 +114,22 @@ impl Repl {
 
         let _ = modules.insert(PRELUDE_MODULE_NAME.into(), type_::build_prelude(&ids));
 
+        let pipe = Stdio::piped();
+
+        //run an execution thread
+        let mut child = Command::new("elixir")
+            .arg("shell.ex")
+            .stdin(pipe)
+            .spawn()
+            .expect("failed to execute child");
+
         Repl {
             ids,
             modules,
             direct_dependencies: collections::HashMap::new(),
             compiled_project,
             env: "".to_string(),
+            child,
         }
     }
 
@@ -132,6 +147,9 @@ impl Repl {
                     "?exit" => {
                         return ();
                     }
+                    "?type" => {
+                        println!("type of x: ");
+                    }
                     _ => println!("unknown command"),
                 }
             } else {
@@ -147,8 +165,17 @@ impl Repl {
     }
 
     fn try_proc(&mut self, src: &str) -> Result<(), GleamError> {
-        let st = gleam_core::parse::parse_statement_sequence(src);
+        let statement = gleam_core::parse::parse_statement_sequence(src);
         println!("{:#?}", st);
+
+        // compile to expression
+        if let Ok(p) = statement {
+            // try to compile it
+            gleam_core::elixir:: 
+            let _ = self.child.stdin.as_ref().unwrap().write(src.as_bytes());
+        }
+
+        return Ok(());
 
         let parsed = parse_module(src).map_err(|err| GleamError::Parse {
             path: "snippet".into(),
