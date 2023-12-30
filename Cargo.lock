@@ -801,6 +801,7 @@ dependencies = [
  "toml_edit",
  "tracing",
  "tracing-subscriber",
+ "vec1",
  "walkdir",
 ]
 

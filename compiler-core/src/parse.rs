@@ -238,7 +238,7 @@ where
         }
     }
 
-    fn parse_definition(&mut self) -> Result<Option<TargetedDefinition>, ParseError> {
+    pub fn parse_definition(&mut self) -> Result<Option<TargetedDefinition>, ParseError> {
         let mut attributes = Attributes::default();
         self.parse_attributes(&mut attributes)?;
 

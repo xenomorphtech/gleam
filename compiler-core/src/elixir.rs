@@ -83,6 +83,16 @@ impl<'env> Env<'env> {
     }
 }
 
+fn statement<'a>(statement: &'a TypedStatement, env: &mut Env<'a>) -> Document<'a> {
+    match statement {
+        Statement::Expression(e) => expr(e, env),
+        Statement::Assignment(a) => assignment(a, env).append(line()),
+        Statement::Use(_) => {
+            unreachable!("Use statements must not be present for Erlang generation")
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Generator<'a> {
     line_numbers: &'a LineNumbers,
@@ -438,16 +448,6 @@ fn const_segment<'a>(
     bit_array_segment(document, options, size, unit, true, env)
 }
 
-fn statement<'a>(statement: &'a TypedStatement, env: &mut Env<'a>) -> Document<'a> {
-    match statement {
-        Statement::Expression(e) => expr(e, env),
-        Statement::Assignment(a) => assignment(a, env).append(line()),
-        Statement::Use(_) => {
-            unreachable!("Use statements must not be present for Erlang generation")
-        }
-    }
-}
-
 fn expr_segment<'a>(
     value: &'a TypedExpr,
     options: &'a [BitArrayOption<TypedExpr>],
@@ -579,7 +579,7 @@ where
     document
 }
 
-fn block<'a>(statements: &'a Vec1<TypedStatement>, env: &mut Env<'a>) -> Document<'a> {
+pub fn block<'a>(statements: &'a Vec1<TypedStatement>, env: &mut Env<'a>) -> Document<'a> {
     if statements.len() == 1 && statements.first().is_non_pipe_expression() {
         return docvec!['(', statement(statements.first(), env), ')'];
     }

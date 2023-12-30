@@ -80,7 +80,8 @@ same-file = "1.0.6"
 opener = "0.6"
 # Drop in replacement for std::path but with only utf-8
 camino = { version = "1.1.6", features = ["serde1"] }
-
+# non empty vectors
+vec1 = "1.8.0"
 [dev-dependencies]
 # Test assertion errors with diffs
 pretty_assertions = "1.0.0"

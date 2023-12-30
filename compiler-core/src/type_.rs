@@ -13,7 +13,7 @@ pub mod tests;
 use ecow::EcoString;
 pub use environment::*;
 pub use error::{Error, UnifyErrorSituation, Warning};
-pub(crate) use expression::ExprTyper;
+pub use expression::ExprTyper;
 pub use fields::FieldMap;
 pub use prelude::*;
 

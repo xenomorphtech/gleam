@@ -19,7 +19,7 @@ use itertools::Itertools;
 use vec1::Vec1;
 
 #[derive(Debug)]
-pub(crate) struct ExprTyper<'a, 'b> {
+pub struct ExprTyper<'a, 'b> {
     pub(crate) environment: &'a mut Environment<'b>,
 
     // Type hydrator for creating types from annotations
@@ -279,7 +279,7 @@ impl<'a, 'b> ExprTyper<'a, 'b> {
         }
     }
 
-    pub(crate) fn infer_statements(
+    pub fn infer_statements(
         &mut self,
         untyped: Vec1<UntypedStatement>,
     ) -> Result<Vec1<TypedStatement>, Error> {
