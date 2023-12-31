@@ -42,7 +42,13 @@ use gleam_core::{
 };
 use std::io;
 
+pub fn send(p: Proto) {
+    println!("{}", serde_json::to_string(&p).expect("should ok"));
+}
+
 pub fn execute() -> Result<(), GleamError> {
+    send(Proto::Info("starting".to_string()));
+
     let target = Target::Elixir;
 
     let perform_codegen = Codegen::All;
@@ -76,8 +82,10 @@ pub fn execute() -> Result<(), GleamError> {
     };
 
     match perform_codegen {
-        Codegen::All | Codegen::DepsOnly => cli::print_compiled(start.elapsed()),
-        Codegen::None => cli::print_checked(start.elapsed()),
+        Codegen::All | Codegen::DepsOnly => {
+            send(Proto::Info(format!("compiled {:?}", start.elapsed())))
+        }
+        Codegen::None => (),
     };
 
     // TODO: wrap all this into a container
@@ -102,6 +110,7 @@ pub fn execute() -> Result<(), GleamError> {
     let mut repl = Repl::new(compiled_project, &mut ln, blocks, typer);
 
     repl.run();
+
     Ok(())
 }
 
@@ -110,12 +119,14 @@ use std::io::Write;
 use std::process::Child;
 use std::process::{Command, Stdio};
 
+use crate::fs::reader;
 use gleam_core::ast::TypedExpr;
 use gleam_core::ast::TypedStatement;
 use gleam_core::build::BuildTargets;
 use gleam_core::type_::Environment;
 use gleam_core::type_::ModuleInterface;
 use std::cell::RefCell;
+use std::io::Read;
 use vec1::Vec1;
 
 struct Repl<'a> {
@@ -125,7 +136,7 @@ struct Repl<'a> {
     direct_dependencies: collections::HashMap<ecow::EcoString, String>,
     modules: im::HashMap<ecow::EcoString, gleam_core::type_::ModuleInterface>,
     ids: UniqueIdGenerator,
-    child: Child,
+    //child: Child,
     //line_numbers: LineNumbers,
     blocks: RefCell<Vec<Vec1<TypedStatement>>>,
     typer: type_::ExprTyper<'a, 'a>,
@@ -146,11 +157,11 @@ impl<'a> Repl<'a> {
         let pipe = Stdio::piped();
 
         //run an execution thread
-        let mut child = Command::new("elixir")
-            .arg("shell.ex")
-            .stdin(pipe)
-            .spawn()
-            .expect("failed to execute child");
+        //        let mut child = Command::new("elixir")
+        //            .arg("shell.ex")
+        //            .stdin(pipe)
+        //            .spawn()
+        //            .expect("failed to execute child");
 
         Repl {
             ids,
@@ -159,7 +170,7 @@ impl<'a> Repl<'a> {
             compiled_project,
             env: elixir::Env::new("repl", "freetype", ln),
             //line_numbers: ln,
-            child,
+            //child,
             blocks,
             typer,
         }
@@ -172,27 +183,29 @@ impl<'a> Repl<'a> {
 
             //io::stdout().flush().expect("flush failed!");
 
-            match io::stdin().read_line(&mut src) {
-                Ok(_) => (),
-                _ => return (),
-            }
+            let mut buf = vec![0u8; 4];
+            io::stdin().read_exact(&mut buf).expect("stream error");
+            let len = u32::from_le_bytes(buf[0..4].try_into().unwrap());
 
-            if src.starts_with("?") {
-                println!("\r\noh, a command");
-                match src.as_str() {
-                    "?exit" => {
-                        return ();
+            let mut req_buf = vec![0u8; len as usize];
+            io::stdin().read_exact(&mut req_buf).expect("stream error");
+
+            //println!(
+            //    "req: {}",
+            //    String::from_utf8(req_buf.clone()).expect("utf8 plz")
+            //);
+            let req: Proto = serde_json::from_slice(&req_buf).expect("wrong serialization of req");
+
+            match req {
+                Proto::CompileExpressionReq(CompileExpressionReq { code: code }) => {
+                    let res = self.try_proc(code.to_string());
+                    match res {
+                        Err(err) => println!("got some error: {}", err),
+                        Ok(_) => (),
                     }
-                    "?type" => {
-                        println!("type of x: ");
-                    }
-                    _ => println!("unknown command"),
                 }
-            } else {
-                let res = self.try_proc(src.to_string());
-                match res {
-                    Err(err) => println!("got some error: {}", err),
-                    Ok(_) => (),
+                _ => {
+                    println!("unhandle request");
                 }
             }
         }
@@ -205,14 +218,14 @@ impl<'a> Repl<'a> {
         // compile to expression
         match statement {
             Err(e) => {
-                println!("parsing error {:?}", e);
+                send(Proto::Info(format!("parsing error {:?}", e)));
             }
             Ok(p) => {
                 let typed = self.typer.infer_statements(p);
 
                 match typed {
                     Err(e) => {
-                        println!("parsing error {:?}", e);
+                        send(Proto::Info(format!("type error {:?}", e)));
                     }
                     Ok(typed) => {
                         //println!("before codegen : {:?}", typed);
@@ -231,13 +244,10 @@ impl<'a> Repl<'a> {
                         //println!("code: {:?}", pcode);
                         // try to run it
                         let bytes = pcode.as_bytes();
-                        let _ = self
-                            .child
-                            .stdin
-                            .as_ref()
-                            .unwrap()
-                            .write(format!("{}\n", bytes.len()).as_bytes());
-                        let _ = self.child.stdin.as_ref().unwrap().write(bytes);
+                        send(Proto::CompileExpressionReply(CompileExpressionReply {
+                            result: ReqResult::Ok(),
+                            code: pcode,
+                        }));
                     }
                 }
             }
@@ -299,6 +309,7 @@ pub enum Proto {
     CompileModuleReply(CompileModuleReply),
     CompileExpressionReq(CompileExpressionReq),
     CompileExpressionReply(CompileExpressionReply),
+    Info(String),
 }
 
 #[derive(Serialize, Deserialize)]
