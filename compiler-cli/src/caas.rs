@@ -78,7 +78,7 @@ pub fn execute() -> Result<(), GleamError> {
     tracing::info!("Compiling packages");
     let options = Options {
         codegen: Codegen::All,
-        mode: Mode::Prod,
+        mode: Mode::Dev,
         target: Some(target),
         warnings_as_errors: false,
     };
