@@ -833,6 +833,12 @@ impl<'a, 'b> ExprTyper<'a, 'b> {
             None => return,
         };
 
+        let list_module = self
+            .environment
+            .importable_modules
+            .get(list_module)
+            .expect("already was imported");
+
         // Check that we're actually using `list.length` from the standard library.
         if list_module.package != crate::STDLIB_PACKAGE_NAME {
             return;
@@ -1416,6 +1422,12 @@ impl<'a, 'b> ExprTyper<'a, 'b> {
                     imported_modules: self.environment.imported_modules.keys().cloned().collect(),
                 })?;
 
+            let module = self
+                .environment
+                .importable_modules
+                .get(module)
+                .expect("already was imported");
+
             let constructor =
                 module
                     .get_public_value(&label)
@@ -1731,6 +1743,13 @@ impl<'a, 'b> ExprTyper<'a, 'b> {
                             .cloned()
                             .collect(),
                     })?;
+
+                let module = self
+                    .environment
+                    .importable_modules
+                    .get(module)
+                    .expect("already was imported");
+
                 module
                     .values
                     .get(name)
@@ -1895,7 +1914,6 @@ impl<'a, 'b> ExprTyper<'a, 'b> {
                             .get(module_alias)
                             .expect("Failed to find previously located module import")
                             .1
-                            .name
                             .clone();
                         let module_value_constructor = ModuleValueConstructor::Record {
                             name: name.clone(),

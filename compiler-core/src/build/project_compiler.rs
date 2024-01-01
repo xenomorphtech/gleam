@@ -55,7 +55,7 @@ pub struct Options {
 #[derive(Debug)]
 pub struct Built {
     pub root_package: Package,
-    module_interfaces: im::HashMap<EcoString, type_::ModuleInterface>,
+    pub module_interfaces: im::HashMap<EcoString, type_::ModuleInterface>,
     compiled_dependency_modules: Vec<Module>,
 }
 

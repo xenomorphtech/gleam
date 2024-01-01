@@ -211,7 +211,7 @@ impl<'a> Importer<'a> {
             let _ = self
                 .environment
                 .imported_modules
-                .insert(used_name, (import.location, import_info));
+                .insert(used_name, (import.location, import_info.name));
         };
 
         Ok(())

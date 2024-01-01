@@ -1,4 +1,3 @@
-mod imports;
 #[cfg(test)]
 mod tests;
 
@@ -108,7 +107,7 @@ pub fn infer_module<A>(
     // We process imports first so that anything imported can be referenced
     // anywhere in the module.
 
-    env.run(origin, &statements.imports, modules)?;
+    env.run(origin, statements.imports.clone(), modules)?;
 
     for function in &statements.functions {
         let is_external = function.external_erlang.is_none()

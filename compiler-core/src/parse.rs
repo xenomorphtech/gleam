@@ -113,6 +113,18 @@ pub fn parse_module(src: &str) -> Result<Parsed, ParseError> {
     Ok(parsed)
 }
 
+pub fn parse_definition(src: &str) -> Result<TargetedDefinition, ParseError> {
+    let lex = lexer::make_tokenizer(src);
+    let mut parser = Parser::new(lex);
+    let expr = parser.parse_definition();
+    let expr = parser.ensure_no_errors_or_remaining_input(expr)?;
+    if let Some(e) = expr {
+        Ok(e)
+    } else {
+        parse_error(ParseErrorType::ExpectedExpr, SrcSpan { start: 0, end: 0 })
+    }
+}
+
 //
 // Test Interface
 //

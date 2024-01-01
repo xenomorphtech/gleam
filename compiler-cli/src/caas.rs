@@ -4,12 +4,27 @@
 //push output code
 //allow for bare option (no root dir, no deps on fs)
 
+use gleam_core::elixir;
+use std::io::Write;
+use std::process::Child;
+use std::process::{Command, Stdio};
+
+use crate::fs::reader;
+use gleam_core::ast::TypedExpr;
+use gleam_core::ast::TypedStatement;
+use gleam_core::ast::{GroupedStatements, TargetedDefinition};
+use gleam_core::build::BuildTargets;
+use gleam_core::type_::Environment;
+use gleam_core::type_::ModuleInterface;
+use std::cell::RefCell;
+use std::io::Read;
+use vec1::Vec1;
+
 use serde::{ser::Error, Deserialize, Serialize};
 use serde_json::{json, Result as JsonResult};
 
-use std::{sync::Arc, time::Instant};
-
 use crate::build::download_dependencies;
+use gleam_core::ast::Definition;
 use gleam_core::{
     // manifest::Manifest,
     analyse::infer_module,
@@ -26,6 +41,7 @@ use gleam_core::{
     warning::TypeWarningEmitter,
     Result,
 };
+use std::{sync::Arc, time::Instant};
 
 use std::collections;
 
@@ -90,44 +106,47 @@ pub fn execute() -> Result<(), GleamError> {
 
     // TODO: wrap all this into a container
     let mut ln = LineNumbers::new("some");
-    let mut blocks = RefCell::new(Vec::new());
+    let blocks = RefCell::new(Vec::new());
 
-    let mut imported_modules = im::HashMap::<ecow::EcoString, ModuleInterface>::new();
+    //    let mut imported_modules = im::HashMap::<ecow::EcoString, ModuleInterface>::new();
     let ids = UniqueIdGenerator::new();
 
-    let _ = imported_modules.insert(PRELUDE_MODULE_NAME.into(), type_::build_prelude(&ids));
+    let mut importable_modules = compiled_project.module_interfaces.clone();
+
+    let _ = importable_modules.insert(PRELUDE_MODULE_NAME.into(), type_::build_prelude(&ids));
+
+    eprintln!(
+        "{:?}",
+        &importable_modules
+            .keys()
+            .into_iter()
+            .map(|a| a.to_string())
+            .collect::<Vec<String>>()
+    );
 
     let warnings = TypeWarningEmitter::null();
+
     let mut typer_environment = Environment::new(
         UniqueIdGenerator::new(),
         "what".into(),
         Target::Erlang,
-        &imported_modules,
+        &importable_modules,
         &warnings,
     );
     let mut typer = type_::ExprTyper::new(&mut typer_environment, BuildTargets::all());
 
-    let mut repl = Repl::new(compiled_project, &mut ln, blocks, typer);
+    let mut repl = Repl::new(
+        compiled_project,
+        &mut ln,
+        blocks,
+        typer_environment,
+        importable_modules.clone(),
+    );
 
     repl.run();
 
     Ok(())
 }
-
-use gleam_core::elixir;
-use std::io::Write;
-use std::process::Child;
-use std::process::{Command, Stdio};
-
-use crate::fs::reader;
-use gleam_core::ast::TypedExpr;
-use gleam_core::ast::TypedStatement;
-use gleam_core::build::BuildTargets;
-use gleam_core::type_::Environment;
-use gleam_core::type_::ModuleInterface;
-use std::cell::RefCell;
-use std::io::Read;
-use vec1::Vec1;
 
 struct Repl<'a> {
     env: elixir::Env<'a>,
@@ -139,7 +158,7 @@ struct Repl<'a> {
     //child: Child,
     //line_numbers: LineNumbers,
     blocks: RefCell<Vec<Vec1<TypedStatement>>>,
-    typer: type_::ExprTyper<'a, 'a>,
+    environment: Environment<'a>,
 }
 
 impl<'a> Repl<'a> {
@@ -147,12 +166,10 @@ impl<'a> Repl<'a> {
         compiled_project: Built,
         ln: &'a mut LineNumbers,
         blocks: RefCell<Vec<Vec1<TypedStatement>>>,
-        typer: type_::ExprTyper<'a, 'a>,
+        environment: Environment<'a>,
+        modules: im::HashMap<ecow::EcoString, ModuleInterface>,
     ) -> Self {
-        let mut modules = im::HashMap::new();
         let ids = UniqueIdGenerator::new();
-
-        let _ = modules.insert(PRELUDE_MODULE_NAME.into(), type_::build_prelude(&ids));
 
         let pipe = Stdio::piped();
 
@@ -172,13 +189,12 @@ impl<'a> Repl<'a> {
             //line_numbers: ln,
             //child,
             blocks,
-            typer,
+            environment,
         }
     }
 
     pub fn run(&mut self) {
         loop {
-            let mut src = String::new();
             //let _ = io::stdout().write("> ".as_bytes());
 
             //io::stdout().flush().expect("flush failed!");
@@ -197,23 +213,111 @@ impl<'a> Repl<'a> {
             let req: Proto = serde_json::from_slice(&req_buf).expect("wrong serialization of req");
 
             match req {
-                Proto::CompileExpressionReq(CompileExpressionReq { code: code }) => {
-                    let res = self.try_proc(code.to_string());
+                Proto::CompileExpressionReq(CompileExpressionReq { code }) => {
+                    let res = self
+                        .try_proc2(code.to_string())
+                        .or_else(|a| {
+                            eprintln!("error: {:?}", a);
+                            Err(a)
+                        })
+                        .or_else(|_| self.try_proc(code.to_string()));
                     match res {
-                        Err(err) => println!("got some error: {}", err),
+                        Err(err) => eprintln!("got some error: {}", err),
                         Ok(_) => (),
                     }
                 }
                 _ => {
-                    println!("unhandle request");
+                    send(Proto::Info("unhandled request".to_string()));
                 }
             }
         }
     }
 
+    fn try_proc2(&mut self, src: String) -> Result<(), GleamError> {
+        let statement =
+            gleam_core::parse::parse_definition(src.as_str()).map_err(|err| GleamError::Parse {
+                path: "snippet".into(),
+                src: src.clone().into(),
+                error: err,
+            })?;
+
+        //let env = self.typer.environment;
+
+        let st = vec![statement.clone()];
+        let statements = GroupedStatements::new(st.into_iter().map(|a| a.definition));
+
+        //Origin::Src
+        //&self.modules
+
+        for import in statements.imports {
+            self.environment
+                .register_import(Origin::Src, &self.environment.importable_modules, &import)
+                .map_err(|err| GleamError::Type {
+                    path: "snippet".into(),
+                    src: src.clone().into(),
+                    error: err,
+                })?;
+        }
+
+        //let _ = self
+        //    .environment
+        //    .run(Origin::Src, statements.imports.clone(), &self.modules);
+
+        //eprintln!("2 - {:?}", statements.imports);
+
+        let mut typer = type_::ExprTyper::new(&mut self.environment, BuildTargets::all());
+
+        // for imp in statements.imports {
+        //     let statement = record_imported_items_for_use_detection(
+        //         imp,
+        //         package,
+        //         direct_dependencies,
+        //         warnings,
+        //         &env,
+        //     )?;
+        //     // typed_statements.push(statement);
+        // }
+        //for t in statements.custom_types {
+        //    let statement = infer_custom_type(t, &mut env)?;
+        //    // typed_statements.push(statement);
+        //}
+        //for t in statements.type_aliases {
+        //    let statement = gleam_core::analyse::insert_type_alias(t, &mut env)?;
+        //    //typed_statements.push(statement);
+        //}
+
+        let gleam_core::ast::TargetedDefinition {
+            definition: def, ..
+        } = statement;
+
+        match def {
+            Definition::Function(f) => {
+                let typed = typer.infer_statements(f.body);
+                eprintln!("{:?}", typed);
+            }
+
+            Definition::TypeAlias(ta) => (),
+
+            Definition::CustomType(ct) => (),
+
+            Definition::Import(import) => (),
+
+            Definition::ModuleConstant(con) => (),
+        }
+
+        send(Proto::CompileExpressionReply(CompileExpressionReply {
+            result: ReqResult::Ok(),
+            code: "".to_string(),
+        }));
+
+        Ok(())
+    }
+
     fn try_proc(&mut self, src: String) -> Result<(), GleamError> {
         let statement = gleam_core::parse::parse_statement_sequence(src.as_str());
+
         //println!("{:#?}", statement);
+        let mut typer = type_::ExprTyper::new(&mut self.environment, BuildTargets::all());
 
         // compile to expression
         match statement {
@@ -221,8 +325,7 @@ impl<'a> Repl<'a> {
                 send(Proto::Info(format!("parsing error {:?}", e)));
             }
             Ok(p) => {
-                let typed = self.typer.infer_statements(p);
-
+                let typed = typer.infer_statements(p);
                 match typed {
                     Err(e) => {
                         send(Proto::Info(format!("type error {:?}", e)));

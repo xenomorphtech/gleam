@@ -20,7 +20,7 @@ pub struct Environment<'a> {
 
     /// Modules that have been imported by the current module, along with the
     /// location of the import statement where they were imported.
-    pub imported_modules: HashMap<EcoString, (SrcSpan, &'a ModuleInterface)>,
+    pub imported_modules: HashMap<EcoString, (SrcSpan, EcoString)>,
     pub unused_modules: HashMap<EcoString, SrcSpan>,
 
     /// Names of modules that have been imported with as name.
@@ -302,6 +302,12 @@ impl<'a> Environment<'a> {
                         imported_modules: self.importable_modules.keys().cloned().collect(),
                     }
                 })?;
+
+                let module = self
+                    .importable_modules
+                    .get(module)
+                    .expect("already was imported");
+
                 let _ = self.unused_modules.remove(module_name);
                 let _ = self.unused_module_aliases.remove(module_name);
                 module
@@ -380,6 +386,11 @@ impl<'a> Environment<'a> {
                     }
                 })?;
                 let _ = self.unused_modules.remove(module_name);
+                let module = self
+                    .importable_modules
+                    .get(module)
+                    .expect("already was imported");
+
                 module.get_public_value(name).ok_or_else(|| {
                     UnknownValueConstructorError::ModuleValue {
                         name: name.clone(),
@@ -719,64 +730,45 @@ use crate::{
     type_::{Error, ModuleInterface, ValueConstructorVariant},
 };
 
-#[derive(Debug)]
-pub struct Importer<'a> {
-    origin: Origin,
-    project_modules: &'a im::HashMap<EcoString, ModuleInterface>,
-}
-
-impl<'a> Importer<'a> {
-    pub fn new(
-        origin: Origin,
-        project_modules: &'a im::HashMap<EcoString, ModuleInterface>,
-    ) -> Self {
-        Self {
-            origin,
-            project_modules,
-        }
-    }
-}
-
 impl<'a> Environment<'a> {
-    pub fn run<'b>(
+    pub fn run(
         &mut self,
         origin: Origin,
-        imports: &'b [Import<()>],
+        imports: Vec<Import<()>>,
         project_modules: &'a im::HashMap<EcoString, ModuleInterface>,
     ) -> Result<(), Error> {
-        let importer = Importer::new(origin, project_modules);
         for import in imports {
-            self.register_import(&importer, import)?;
+            self.register_import(origin, project_modules, &import)?;
         }
         Ok(())
     }
 
-    fn register_import(
+    pub fn register_import(
         &mut self,
-        importer: &Importer<'a>,
+        origin: Origin,
+        project_modules: &im::HashMap<EcoString, ModuleInterface>,
         import: &Import<()>,
     ) -> Result<(), Error> {
-        let location = import.location;
+        let import = import.clone();
+        let location = import.location.clone();
         let imported_module_name = import.module.clone();
 
         // Find imported module
-        let module_info = importer
-            .project_modules
-            .get(&imported_module_name)
-            .ok_or_else(|| Error::UnknownModule {
-                location,
-                name: imported_module_name.clone(),
-                imported_modules: self.imported_modules.keys().cloned().collect(),
-            })?;
+        let module_info =
+            project_modules
+                .get(&imported_module_name)
+                .ok_or_else(|| Error::UnknownModule {
+                    location,
+                    name: imported_module_name.clone(),
+                    imported_modules: self.imported_modules.keys().cloned().collect(),
+                })?;
 
         self.check_src_does_not_import_test(
-            importer.origin,
+            origin,
             module_info,
             location,
             imported_module_name.clone(),
         )?;
-        self.register_module(import, module_info)?;
-
         // Insert unqualified imports into scope
         for type_ in &import.unqualified_types {
             self.register_unqualified_type(type_, module_info)?;
@@ -784,6 +776,8 @@ impl<'a> Environment<'a> {
         for value in &import.unqualified_values {
             self.register_unqualified_value(value, module_info)?;
         }
+        self.register_module(import, module_info)?;
+
         Ok(())
     }
 
@@ -893,8 +887,8 @@ impl<'a> Environment<'a> {
 
     fn register_module(
         &mut self,
-        import: &Import<()>,
-        import_info: &'a ModuleInterface,
+        import: Import<()>,
+        import_info: &ModuleInterface,
     ) -> Result<(), Error> {
         if let Some(used_name) = import.used_name() {
             self.check_not_a_duplicate_import(&used_name, import.location)?;
@@ -922,7 +916,7 @@ impl<'a> Environment<'a> {
             // Insert imported module into scope
             let _ = self
                 .imported_modules
-                .insert(used_name, (import.location, import_info));
+                .insert(used_name, (import.location, import_info.name.clone()));
         };
 
         Ok(())
