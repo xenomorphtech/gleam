@@ -9,27 +9,34 @@ use crate::{
 #[derive(Debug)]
 pub struct Importer<'a> {
     origin: Origin,
-    environment: Environment<'a>,
+    environment: &'a mut Environment<'a>,
+    project_modules: &'a im::HashMap<EcoString, ModuleInterface>,
 }
 
 impl<'a> Importer<'a> {
-    pub fn new(origin: Origin, environment: Environment<'a>) -> Self {
+    pub fn new(
+        origin: Origin,
+        environment: &'a mut Environment<'a>,
+        project_modules: &'a im::HashMap<EcoString, ModuleInterface>,
+    ) -> Self {
         Self {
             origin,
             environment,
+            project_modules,
         }
     }
 
     pub fn run<'b>(
         origin: Origin,
-        env: Environment<'a>,
+        env: &'a mut Environment<'a>,
         imports: &'b [Import<()>],
-    ) -> Result<Environment<'a>, Error> {
-        let mut importer = Self::new(origin, env);
+        project_modules: &'a im::HashMap<EcoString, ModuleInterface>,
+    ) -> Result<(), Error> {
+        let mut importer = Self::new(origin, env, project_modules);
         for import in imports {
             importer.register_import(import)?;
         }
-        Ok(importer.environment)
+        Ok(())
     }
 
     fn register_import(&mut self, import: &Import<()>) -> Result<(), Error> {
@@ -38,8 +45,7 @@ impl<'a> Importer<'a> {
 
         // Find imported module
         let module_info = self
-            .environment
-            .importable_modules
+            .project_modules
             .get(&imported_module_name)
             .ok_or_else(|| Error::UnknownModule {
                 location,

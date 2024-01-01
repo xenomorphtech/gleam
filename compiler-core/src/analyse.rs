@@ -94,7 +94,7 @@ pub fn infer_module<A>(
 ) -> Result<TypedModule, Error> {
     let name = module.name.clone();
     let documentation = std::mem::take(&mut module.documentation);
-    let env = Environment::new(ids.clone(), name.clone(), target, modules, warnings);
+    let mut env = Environment::new(ids.clone(), name.clone(), target, modules, warnings);
     validate_module_name(&name)?;
 
     let mut type_names = HashMap::with_capacity(module.definitions.len());
@@ -107,7 +107,8 @@ pub fn infer_module<A>(
     // Register any modules, types, and values being imported
     // We process imports first so that anything imported can be referenced
     // anywhere in the module.
-    let mut env = imports::Importer::run(origin, env, &statements.imports)?;
+
+    env.run(origin, &statements.imports, modules)?;
 
     for function in &statements.functions {
         let is_external = function.external_erlang.is_none()
