@@ -24,6 +24,7 @@ pub fn main(options: Options, manifest: Manifest) -> Result<Built> {
     let perform_codegen = options.codegen;
     let root_config = crate::config::root_config()?;
     let telemetry = Box::new(cli::Reporter::new());
+
     let io = fs::ProjectIO::new();
     let start = Instant::now();
     let lock = BuildLock::new_target(
@@ -32,6 +33,7 @@ pub fn main(options: Options, manifest: Manifest) -> Result<Built> {
         options.target.unwrap_or(root_config.target),
     )?;
     let current_dir = get_current_directory().expect("Failed to get current directory");
+    
 
     tracing::info!("Compiling packages");
     let compiled = {

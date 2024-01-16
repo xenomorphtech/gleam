@@ -913,8 +913,8 @@ fn const_inline<'a>(literal: &'a TypedConstant, env: &mut Env<'a>) -> Document<'
     }
 }
 
-fn custom_type(_tag: &EcoString) -> Document<'_> {
-    Document::Str("AType")
+fn custom_type(tag: &EcoString) -> Document<'_> {
+    Document::Str(tag)
 }
 
 fn record_constructor_function(tag: &EcoString, arity: usize) -> Document<'_> {
