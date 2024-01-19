@@ -157,7 +157,10 @@ fn tag_tuple_pattern<'a>(
     env: &mut Env<'a>,
 ) -> Document<'a> {
     if args.is_empty() {
-        atom_string(name.to_string())
+        atom_string(
+            "Elixir."
+            .to_string()
+            + name)
     } else {
         let mut rev_fields: HashMap<usize, &str> = HashMap::new();
         if let Some(fields::FieldMap { fields, .. }) = field_map {

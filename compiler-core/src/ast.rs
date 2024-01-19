@@ -23,12 +23,12 @@ use ecow::EcoString;
 use pretty_assertions::assert_eq;
 use vec1::Vec1;
 
-pub const TRY_VARIABLE: &str = "_try";
-pub const PIPE_VARIABLE: &str = "_pipe";
-pub const USE_ASSIGNMENT_VARIABLE: &str = "_use";
-pub const ASSERT_FAIL_VARIABLE: &str = "_assert_fail";
-pub const ASSERT_SUBJECT_VARIABLE: &str = "_assert_subject";
-pub const CAPTURE_VARIABLE: &str = "_capture";
+pub const TRY_VARIABLE: &str = "gG_try";
+pub const PIPE_VARIABLE: &str = "gG_pipe";
+pub const USE_ASSIGNMENT_VARIABLE: &str = "gG_use";
+pub const ASSERT_FAIL_VARIABLE: &str = "gG_assert_fail";
+pub const ASSERT_SUBJECT_VARIABLE: &str = "gG_assert_subject";
+pub const CAPTURE_VARIABLE: &str = "gG_capture";
 
 pub trait HasLocation {
     fn location(&self) -> SrcSpan;
