@@ -1343,12 +1343,14 @@ fn record_update<'a>(
 ) -> Document<'a> {
     let expr_doc = maybe_block_expr(spread, env);
 
-    let args_doc = args.iter().fold("".to_doc(), |_tuple_doc, arg| {
+    let args_doc = args.iter().map(|arg| {
         let index_doc = Document::String(arg.label.to_string());
         let value_doc = maybe_block_expr(&arg.value, env);
 
         index_doc.append(": ").append(value_doc)
     });
+
+    let args_doc: Vec<Document<'a>> = Itertools::intersperse(args_doc, ", ".to_doc()).collect();
 
     "%{ "
         .to_doc()
